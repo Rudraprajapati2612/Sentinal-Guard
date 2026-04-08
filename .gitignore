@@ -1,0 +1,44 @@
+# ----------------------
+# Rust
+# ----------------------
+target/
+**/*.rs.bk
+Cargo.lock
+
+# ----------------------
+# Anchor / Solana
+# ----------------------
+target/deploy/
+target/idl/
+test-ledger/
+*.json
+
+# BUT keep keypair if needed manually (optional)
+# !keys/watcher-keypair.json
+
+# ----------------------
+# Node / Bun
+# ----------------------
+node_modules/
+.bun/
+.next/
+dist/
+build/
+
+# ----------------------
+# Env files
+# ----------------------
+.env
+.env.local
+
+# ----------------------
+# OS / Editor
+# ----------------------
+.DS_Store
+.vscode/
+.idea/
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
