@@ -6,17 +6,28 @@ declare_id!("3qkLJYYQfXK1GJWkPicuNtQnsme5WoZYkUfdqYrGrc1y");
 pub mod sentinel_guardian {
     use super::*;
 
-    /// Called once by a protocol to register with SentinelGuard.
-    /// They deposit SOL into the bounty escrow at this point.
     pub fn register_protocol(
         ctx: Context<RegisterProtocol>,
         escrow_amount: u64,
     ) -> Result<()> {
-        let sentinel_key = ctx.accounts.sentinel_state.key();
-        let sentinel_info = ctx.accounts.sentinel_state.to_account_info();
     
+        
+        let sentinel_info = ctx.accounts.sentinel_state.to_account_info();
         let protocol_info = ctx.accounts.protocol_authority.to_account_info();
     
+        
+        if escrow_amount > 0 {
+            let cpi_ctx = CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: protocol_info.clone(),    
+                    to: sentinel_info.clone(),     
+                },
+            );
+            anchor_lang::system_program::transfer(cpi_ctx, escrow_amount)?;
+        }
+    
+        // ✅ STEP 3: NOW take mutable borrow (SAFE)
         let state = &mut ctx.accounts.sentinel_state;
     
         state.protocol_address = ctx.accounts.protocol_authority.key();
@@ -27,51 +38,40 @@ pub mod sentinel_guardian {
         state.authority = ctx.accounts.watcher_authority.key();
         state.bump = ctx.bumps.sentinel_state;
     
-        // Transfer SOL
-        if escrow_amount > 0 {
-            let ix = anchor_lang::solana_program::system_instruction::transfer(
-                &protocol_info.key(),
-                &sentinel_key,
-                escrow_amount,
-            );
-    
-            anchor_lang::solana_program::program::invoke(
-                &ix,
-                &[
-                    protocol_info,
-                    sentinel_info, 
-                ],)?;
-        }
+        msg!(
+            "Protocol registered: {}, watcher: {}, escrow: {}",
+            state.protocol_address,
+            state.authority,
+            escrow_amount
+        );
     
         Ok(())
     }
-    /// Called by the watcher binary when an exploit is detected.
-    /// This is the critical path — must be fast.
+
     pub fn pause_withdrawals(
         ctx: Context<PauseWithdrawals>,
         alert_id: [u8; 32],
         severity: u8,
+        rule_triggered: u8,         // which rule fired
         estimated_at_risk: u64,
     ) -> Result<()> {
         let state = &mut ctx.accounts.sentinel_state;
 
-        // Only the registered watcher authority can pause
         require!(
             ctx.accounts.watcher.key() == state.authority,
             SentinelError::UnauthorizedWatcher
         );
-
         require!(!state.paused, SentinelError::AlreadyPaused);
 
         state.paused = true;
         state.pause_count += 1;
         state.last_pause_ts = Clock::get()?.unix_timestamp;
 
-        // Record the alert on-chain
         let alert = &mut ctx.accounts.alert_record;
         alert.alert_id = alert_id;
         alert.protocol = state.protocol_address;
         alert.severity = severity;
+        alert.rule_triggered = rule_triggered;
         alert.estimated_at_risk = estimated_at_risk;
         alert.watcher = ctx.accounts.watcher.key();
         alert.validated = false;
@@ -83,77 +83,92 @@ pub mod sentinel_guardian {
             protocol: state.protocol_address,
             alert_id,
             severity,
+            rule_triggered,
             estimated_at_risk,
             slot: Clock::get()?.slot,
         });
 
         msg!(
-            "PAUSE FIRED — protocol: {}, severity: {}, at_risk: {}",
+            "PAUSE FIRED — protocol: {}, severity: {}, rule: {}, at_risk: {}",
             state.protocol_address,
             severity,
+            rule_triggered,
             estimated_at_risk
         );
         Ok(())
     }
 
-    /// Called by the protocol team (multisig) after reviewing the alert.
-    /// Only the original protocol_authority can unpause.
     pub fn unpause_withdrawals(ctx: Context<UnpauseWithdrawals>) -> Result<()> {
         let state = &mut ctx.accounts.sentinel_state;
         require!(state.paused, SentinelError::NotPaused);
         state.paused = false;
 
-        msg!("Protocol unpaused by authority: {}", ctx.accounts.protocol_authority.key());
+        emit!(UnpauseEvent {
+            protocol: state.protocol_address,
+            unpaused_by: ctx.accounts.protocol_authority.key(),
+            slot: Clock::get()?.slot,
+        });
+
+        msg!("Protocol unpaused by: {}", ctx.accounts.protocol_authority.key());
         Ok(())
     }
 
-    /// Protocol team calls this to validate an alert was real.
-    /// Enables the watcher to claim their bounty.
     pub fn validate_alert(ctx: Context<ValidateAlert>) -> Result<()> {
         let alert = &mut ctx.accounts.alert_record;
         require!(!alert.validated, SentinelError::AlreadyValidated);
         alert.validated = true;
-
         msg!("Alert validated: {:?}", alert.alert_id);
         Ok(())
     }
 
-    /// Watcher calls this after alert is validated to collect bounty.
     pub fn claim_bounty(
         ctx: Context<ClaimBounty>,
         alert_id: [u8; 32],
     ) -> Result<()> {
-        let alert = &ctx.accounts.alert_record;
-        let state = &mut ctx.accounts.sentinel_state;
+        // Read everything first — no borrow conflict
+        let validated = ctx.accounts.alert_record.validated;
+        let bounty_claimed = ctx.accounts.alert_record.bounty_claimed;
+        let alert_watcher = ctx.accounts.alert_record.watcher;
+        let stored_alert_id = ctx.accounts.alert_record.alert_id;
+        let alert_protocol = ctx.accounts.alert_record.protocol;
 
-        require!(alert.validated, SentinelError::AlertNotValidated);
-        require!(!alert.bounty_claimed, SentinelError::BountyAlreadyClaimed);
+        require!(validated, SentinelError::AlertNotValidated);
+        require!(!bounty_claimed, SentinelError::BountyAlreadyClaimed);
         require!(
-            ctx.accounts.watcher.key() == alert.watcher,
+            ctx.accounts.watcher.key() == alert_watcher,
             SentinelError::UnauthorizedWatcher
         );
-        require!(alert.alert_id == alert_id, SentinelError::AlertMismatch);
+        require!(stored_alert_id == alert_id, SentinelError::AlertMismatch);
+        // Defense in depth: alert must belong to this protocol's escrow
+        require!(
+            alert_protocol == ctx.accounts.sentinel_state.protocol_address,
+            SentinelError::AlertMismatch
+        );
 
-        // Pay 10% of escrow as bounty (configurable later)
-        let bounty_amount = state.escrow_balance / 10;
-        require!(state.escrow_balance >= bounty_amount, SentinelError::InsufficientEscrow);
+        let bounty_amount = ctx.accounts.sentinel_state.escrow_balance / 10;
+        require!(
+            ctx.accounts.sentinel_state.escrow_balance >= bounty_amount,
+            SentinelError::InsufficientEscrow
+        );
 
-        state.escrow_balance -= bounty_amount;
-
-        // Transfer from PDA to watcher
+        // Transfer lamports from PDA to watcher
         **ctx.accounts.sentinel_state.to_account_info().try_borrow_mut_lamports()? -= bounty_amount;
         **ctx.accounts.watcher.to_account_info().try_borrow_mut_lamports()? += bounty_amount;
 
-        // Mark claimed — need mut ref after the immutable borrow above
-        let alert = &mut ctx.accounts.alert_record;
-        alert.bounty_claimed = true;
+        // Now mutably borrow to update state
+        ctx.accounts.sentinel_state.escrow_balance -= bounty_amount;
+        ctx.accounts.alert_record.bounty_claimed = true;
 
-        msg!("Bounty claimed: {} lamports by {}", bounty_amount, ctx.accounts.watcher.key());
+        msg!(
+            "Bounty claimed: {} lamports by {}",
+            bounty_amount,
+            ctx.accounts.watcher.key()
+        );
         Ok(())
     }
 }
 
-// ─── Accounts ───────────────────────────────────────────────────────────────
+// ─── Accounts ────────────────────────────────────────────────────────────────
 
 #[derive(Accounts)]
 pub struct RegisterProtocol<'info> {
@@ -169,7 +184,7 @@ pub struct RegisterProtocol<'info> {
     #[account(mut)]
     pub protocol_authority: Signer<'info>,
 
-    /// CHECK: This is the watcher keypair pubkey — stored for authorization
+    /// CHECK: Watcher pubkey — stored for pause authorization
     pub watcher_authority: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
@@ -197,7 +212,7 @@ pub struct PauseWithdrawals<'info> {
     #[account(mut)]
     pub watcher: Signer<'info>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<'info, System>,  // required for alert_record init
 }
 
 #[derive(Accounts)]
@@ -252,24 +267,25 @@ pub struct ClaimBounty<'info> {
 #[account]
 #[derive(InitSpace)]
 pub struct SentinelState {
-    pub protocol_address: Pubkey,   // the pool/vault being guarded
-    pub paused: bool,               // THE flag — protocols check this
-    pub pause_count: u64,           // analytics
-    pub last_pause_ts: i64,         // unix timestamp
-    pub escrow_balance: u64,        // bounty escrow in lamports
-    pub authority: Pubkey,          // watcher keypair that can pause
+    pub protocol_address: Pubkey,
+    pub paused: bool,
+    pub pause_count: u64,
+    pub last_pause_ts: i64,
+    pub escrow_balance: u64,
+    pub authority: Pubkey,
     pub bump: u8,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct AlertRecord {
-    pub alert_id: [u8; 32],         // sha256(tx_sig + slot)
+    pub alert_id: [u8; 32],
     pub protocol: Pubkey,
-    pub severity: u8,               // 0-100
-    pub estimated_at_risk: u64,     // lamports equivalent
-    pub watcher: Pubkey,            // who detected (for bounty)
-    pub validated: bool,            // protocol team confirmed real
+    pub severity: u8,
+    pub rule_triggered: u8,       // 1=flash_loan, 2=tvl_velocity, 3=bridge_spike
+    pub estimated_at_risk: u64,
+    pub watcher: Pubkey,
+    pub validated: bool,
     pub bounty_claimed: bool,
     pub timestamp: i64,
     pub bump: u8,
@@ -282,7 +298,15 @@ pub struct PauseEvent {
     pub protocol: Pubkey,
     pub alert_id: [u8; 32],
     pub severity: u8,
+    pub rule_triggered: u8,
     pub estimated_at_risk: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct UnpauseEvent {
+    pub protocol: Pubkey,
+    pub unpaused_by: Pubkey,
     pub slot: u64,
 }
 
