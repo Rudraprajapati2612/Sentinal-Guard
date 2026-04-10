@@ -13,13 +13,13 @@ futures        = "0.3"
 yellowstone-grpc-client = { git = "https://github.com/rpcpool/yellowstone-grpc.git", package = "yellowstone-grpc-client" }
 yellowstone-grpc-proto  = { git = "https://github.com/rpcpool/yellowstone-grpc.git", package = "yellowstone-grpc-proto" }
 prost          = "0.13"
-tonic          = { version = "0.12", features = ["tls", "tls-roots"] }
+tonic          = { version = "0.14", features = ["tls-native-roots"] }
  
 # ── Solana ───────────────────────────────────────────────────────────────────
 solana-sdk        = "2.0"
 solana-client     = "2.0"
-anchor-client     = { version = "0.31.1", features = ["async"] }
-anchor-lang       = "0.31.1"
+anchor-client     = { version = "0.32.1", features = ["async"] }
+anchor-lang       = "0.32.1"
  
 # ── Redis (alert dedup + hot state cache) ────────────────────────────────────
 redis             = { version = "0.26", features = ["tokio-comp", "connection-manager"] }

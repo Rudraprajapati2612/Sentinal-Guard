@@ -11,3 +11,4 @@ use solana_sdk::signer::Signer;
 use tokio::sync::broadcast;
 use tracing::{error, info};
 
+fn main() {}
