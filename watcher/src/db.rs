@@ -15,7 +15,7 @@ use crate::config::Config;
 pub type DbPool = PgPool;
 
 // ─── Row types ────────────────────────────────────────────────────────────────
-
+ 
 #[derive(Debug, sqlx::FromRow)]
 pub struct AlertRow {
     pub id: Uuid,

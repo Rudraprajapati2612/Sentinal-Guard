@@ -112,7 +112,7 @@ pub mod sentinel_guardian {
         msg!("Protocol unpaused by: {}", ctx.accounts.protocol_authority.key());
         Ok(())
     }
-
+   
     pub fn validate_alert(ctx: Context<ValidateAlert>) -> Result<()> {
         let alert = &mut ctx.accounts.alert_record;
         require!(!alert.validated, SentinelError::AlreadyValidated);
