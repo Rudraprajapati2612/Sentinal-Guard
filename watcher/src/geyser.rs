@@ -1,202 +1,349 @@
 // watcher/src/geyser.rs
 //
-// Production Geyser gRPC subscriber using Yellowstone (Helius fork).
-//
-// Architecture decision — NO Kafka here:
-//   The Geyser stream → broadcast channel path must be sub-millisecond.
-//   Kafka adds 5–20ms per message. For the detection critical path (Rule 1
-//   fires in the same slot as the flash loan), we cannot afford that latency.
-//
-//   Kafka IS used after detection fires an AlertEvent (see responder/webhooks.rs).
-//   That path is NOT latency-sensitive — the pause tx already landed.
-//
-// Redis IS used here for one thing only:
-//   TVL net-delta is written to Redis (key: tvl:{protocol}) so the detection
-//   engine can read the latest TVL without a DB round-trip on every slot.
+// Temporary subscriber implementation for environments without Yellowstone
+// gRPC access. This uses Solana/Helius WebSocket log subscriptions plus
+// per-signature JSON-RPC transaction fetches to reconstruct ParsedTransaction.
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use redis::aio::ConnectionManager;
-use std::collections::HashMap;
-use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
-
-use yellowstone_grpc_client::GeyserGrpcClient;
-use yellowstone_grpc_proto::prelude::{
-    subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterTransactions,
+use solana_client::{
+    nonblocking::{pubsub_client::PubsubClient, rpc_client::RpcClient},
+    rpc_config::{RpcTransactionConfig, RpcTransactionLogsConfig, RpcTransactionLogsFilter},
+    rpc_response::RpcLogsResponse,
 };
+use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
+use solana_transaction_status_client_types::{
+    option_serializer::OptionSerializer, EncodedConfirmedTransactionWithStatusMeta,
+    EncodedTransaction, UiInnerInstructions, UiInstruction, UiMessage, UiParsedInstruction,
+    UiTransactionEncoding, UiTransactionStatusMeta,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{
+    sync::{broadcast, mpsc},
+    task::JoinSet,
+};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::types::{CpiMetrics, FlashLoanEvidence, ParsedTransaction, TokenDelta, TvlCache};
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 /// Known flash loan program IDs on Solana mainnet.
-/// Tuple: (program_id, human_readable_name)
-///
-/// Phase 2: pull this from a remote config endpoint so new protocols
-/// can be added without redeployment.
 const FLASH_LOAN_PROGRAMS: &[(&str, &str)] = &[
     ("So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo", "Solend"),
-    ("MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",  "Marginfi"),
-    ("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  "Orca Whirlpool"),
-    ("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  "Jupiter"),
+    ("MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD", "Marginfi"),
+    ("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", "Orca Whirlpool"),
+    ("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "Jupiter"),
 ];
 
 /// Known bridge program IDs — used in engine.rs for bridge outflow detection.
-/// Kept here as the canonical source.
 pub const BRIDGE_PROGRAMS: &[&str] = &[
-    "worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth",   // Wormhole core
-    "3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHHF4ssjQ5",  // Wormhole token bridge
+    "worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth",
+    "3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHHF4ssjQ5",
 ];
 
 /// USDC mint address — only stablecoin we track for TVL right now.
-/// Phase 2: add USDT, PYUSD, and use Pyth oracle prices for non-stable tokens.
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 /// Minimum borrow amount to count as a flash loan in Method 3 (delta pattern).
-/// $500 USDC = 500_000_000 raw (6 decimals). Filters out small test transactions.
 const FLASH_LOAN_MIN_BORROW_RAW: u64 = 500_000_000;
 
-// ─── Main subscriber loop ─────────────────────────────────────────────────────
+#[derive(Debug)]
+enum SubscriberEvent {
+    Log(RpcLogsResponse),
+    Error(anyhow::Error),
+}
 
 pub async fn run(
     cfg: Config,
     tx_sender: broadcast::Sender<ParsedTransaction>,
     redis: ConnectionManager,
 ) -> Result<()> {
-    info!("Connecting to Geyser at {}", cfg.geyser_endpoint);
+    let ws_url = websocket_url(&cfg);
+    let rpc_url = subscriber_rpc_url(&cfg);
 
-    let mut client = GeyserGrpcClient::build_from_shared(cfg.geyser_endpoint.clone())?
-        .x_token(Some(cfg.helius_api_key.clone()))?
-        .connect()
-        .await
-        .with_context(|| format!("Failed to connect to Geyser at {}", cfg.geyser_endpoint))?;
+    info!("Connecting to WebSocket at {}", ws_url);
+    info!("Using RPC fetch endpoint {}", rpc_url);
 
-    info!("Geyser connected ✓");
-
-    // Build transaction filter — one filter entry per watched program.
-    // Filters are ORed on the validator side: any tx touching ANY watched program
-    // will be streamed to us.
-    let tx_filter = cfg
-        .watched_programs
-        .iter()
-        .enumerate()
-        .map(|(i, program_id)| {
-            (
-                format!("filter_{}", i),
-                SubscribeRequestFilterTransactions {
-                    vote: Some(false),   // skip vote transactions — very high volume, not useful
-                    failed: Some(false), // skip failed transactions — can't drain if it failed
-                    account_include: vec![program_id.clone()],
-                    account_exclude: vec![],
-                    account_required: vec![],
-                    signature: None,
-                },
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
-    let subscribe_request = SubscribeRequest {
-        transactions: tx_filter,
-        accounts: HashMap::new(),
-        slots: HashMap::new(),
-        transactions_status: HashMap::new(),
-        blocks: HashMap::new(),
-        blocks_meta: HashMap::new(),
-        entry: HashMap::new(),
-        commitment: Some(0), // 0 = Processed (fastest — before Confirmed/Finalized)
-        accounts_data_slice: vec![],
-        ping: None,
-        from_slot: None,
-    };
-
-    let (mut _subscribe_tx, mut stream) = client
-        .subscribe_with_request(Some(subscribe_request))
-        .await
-        .context("Failed to start Geyser subscription")?;
-
-    info!(
-        "Geyser subscription active — watching {} programs",
-        cfg.watched_programs.len()
+    let pubsub = Arc::new(
+        PubsubClient::new(&ws_url)
+            .await
+            .with_context(|| format!("Failed to connect to WebSocket at {}", ws_url))?,
     );
-    for p in &cfg.watched_programs {
-        info!("  → {}", p);
+    let rpc = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed());
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<SubscriberEvent>();
+    let mut join_set = JoinSet::new();
+
+    for program_id in cfg.watched_programs.clone() {
+        let pubsub = Arc::clone(&pubsub);
+        let event_tx = event_tx.clone();
+
+        join_set.spawn(async move {
+            let filter = RpcTransactionLogsFilter::All;
+            let config = RpcTransactionLogsConfig {
+                commitment: Some(CommitmentConfig::processed()),
+            };
+
+            let (mut stream, unsubscribe) = match pubsub.logs_subscribe(filter, config).await {
+                Ok(parts) => parts,
+                Err(e) => {
+                    let _ = event_tx.send(SubscriberEvent::Error(anyhow::anyhow!(
+                        "WebSocket subscribe failed for {}: {}",
+                        program_id,
+                        e
+                    )));
+                    return;
+                }
+            };
+
+            info!("WebSocket subscription active for {}", program_id);
+
+            while let Some(resp) = stream.next().await {
+                if resp.value.err.is_none() {
+                    let _ = event_tx.send(SubscriberEvent::Log(resp.value));
+                }
+            }
+
+            unsubscribe().await;
+            let _ = event_tx.send(SubscriberEvent::Error(anyhow::anyhow!(
+                "WebSocket stream ended for {}",
+                program_id
+            )));
+        });
     }
+
+    drop(event_tx);
 
     let mut redis = redis;
     let mut processed: u64 = 0;
     let mut errors: u64 = 0;
+    let mut seen_signatures: HashMap<String, Instant> = HashMap::new();
 
-    while let Some(msg) = stream.next().await {
-        match msg {
-            Ok(update) => {
-                let Some(update_oneof) = update.update_oneof else {
-                    continue;
+    loop {
+        tokio::select! {
+            maybe_event = event_rx.recv() => {
+                let Some(event) = maybe_event else {
+                    return Err(anyhow::anyhow!("All WebSocket subscriptions ended unexpectedly"));
                 };
 
-                match update_oneof {
-                    UpdateOneof::Transaction(tx_update) => {
-                        match parse_geyser_transaction(tx_update) {
-                            Ok(parsed) => {
-                                processed += 1;
+                match event {
+                    SubscriberEvent::Log(logs) => {
+                        println!("TX received: {}", logs.signature);        
+                        prune_seen_signatures(&mut seen_signatures);
+                        if seen_signatures.contains_key(&logs.signature) {
+                            continue;
+                        }
+                        seen_signatures.insert(logs.signature.clone(), Instant::now());
 
-                                if processed % 1000 == 0 {
+                        match fetch_transaction_via_rpc(&rpc, &logs).await {
+                            Ok(parsed) => {
+                                println!("Parsed Tx:{}",parsed.signature);
+                                processed += 1;
+                                
+                                if processed % 100 == 0 {
                                     debug!("Processed {} txs ({} errors)", processed, errors);
                                 }
 
-                                // Write TVL net-delta to Redis.
-                                // Fire-and-forget — don't block the gRPC stream on Redis latency.
-                                // The engine reads this on every slot to get current TVL.
                                 write_tvl_to_redis(&parsed, &cfg, &mut redis);
 
-                                // Check receivers before sending — if detection engine
-                                // crashed and dropped its receiver, no point continuing.
                                 if tx_sender.receiver_count() == 0 {
-                                    warn!("No receivers on tx channel — stopping Geyser subscriber");
+                                    warn!("No receivers on tx channel — stopping subscriber");
                                     break;
                                 }
 
                                 if let Err(e) = tx_sender.send(parsed) {
-                                    // Broadcast channel is full — engine is too slow.
-                                    // Old messages are silently dropped by Tokio broadcast.
-                                    // This is intentional — we never want to backpressure the stream.
                                     debug!("Tx channel lagged: {}", e);
                                 }
                             }
                             Err(e) => {
                                 errors += 1;
-                                if errors % 100 == 0 {
-                                    warn!("Parse errors: {} total — last: {}", errors, e);
+                                if errors % 25 == 0 {
+                                    warn!("Parse/fetch errors: {} total — last: {}", errors, e);
                                 }
                             }
                         }
                     }
-                    UpdateOneof::Ping(_) => {
-                        debug!("Geyser ping received");
+                    SubscriberEvent::Error(e) => {
+                        error!("WebSocket subscriber error: {}", e);
+                        return Err(e);
                     }
-                    _ => {} // ignore account updates, slot updates, block meta etc.
                 }
             }
-            Err(e) => {
-                error!("Geyser stream error: {} — outer loop will reconnect", e);
-                return Err(anyhow::anyhow!("Geyser stream failed: {}", e));
+            maybe_joined = join_set.join_next(), if !join_set.is_empty() => {
+                if let Some(Err(e)) = maybe_joined {
+                    return Err(anyhow::anyhow!("WebSocket subscription task panicked: {}", e));
+                }
             }
         }
     }
 
-    warn!("Geyser stream ended unexpectedly");
+    warn!("WebSocket subscriber ended unexpectedly");
     Ok(())
 }
 
-// ─── TVL Redis writer ─────────────────────────────────────────────────────────
+fn prune_seen_signatures(seen_signatures: &mut HashMap<String, Instant>) {
+    const KEEP_FOR: Duration = Duration::from_secs(90);
+    let now = Instant::now();
+    seen_signatures.retain(|_, inserted_at| now.duration_since(*inserted_at) < KEEP_FOR);
+}
+
+async fn fetch_transaction_via_rpc(
+    rpc: &RpcClient,
+    logs: &RpcLogsResponse,
+) -> Result<ParsedTransaction> {
+    let signature = Signature::from_str(&logs.signature)
+        .with_context(|| format!("Invalid signature from WebSocket: {}", logs.signature))?;
+
+    let config = RpcTransactionConfig {
+        encoding: Some(UiTransactionEncoding::JsonParsed),
+        commitment: Some(CommitmentConfig::confirmed()),
+        max_supported_transaction_version: Some(0),
+    };
+
+    let mut last_error = None;
+    for attempt in 0..6 {
+        match rpc.get_transaction_with_config(&signature, config).await {
+            Ok(tx) => return parse_rpc_transaction(tx, logs),
+            Err(e) => {
+                last_error = Some(e);
+                tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Failed to fetch transaction {} over RPC: {}",
+        logs.signature,
+        last_error
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown RPC error".to_string())
+    ))
+}
+
+fn parse_rpc_transaction(
+    tx: EncodedConfirmedTransactionWithStatusMeta,
+    logs: &RpcLogsResponse,
+) -> Result<ParsedTransaction> {
+    let meta = tx
+        .transaction
+        .meta
+        .as_ref()
+        .context("Missing transaction meta from RPC response")?;
+
+    let ui_tx = match &tx.transaction.transaction {
+        EncodedTransaction::Json(ui_tx) => ui_tx,
+        _ => return Err(anyhow::anyhow!("RPC response did not return JSON transaction data")),
+    };
+
+    let account_keys = extract_account_keys(&ui_tx.message);
+    let fee_payer = account_keys.first().cloned().unwrap_or_default();
+
+    let mut program_ids = extract_program_ids(&ui_tx.message, &account_keys);
+    program_ids.extend(extract_inner_program_ids(meta, &account_keys));
+    let program_ids: Vec<String> = program_ids.into_iter().collect();
+
+    let token_deltas = parse_token_deltas(meta, &account_keys);
+    let log_messages = extract_log_messages(meta).unwrap_or_else(|| logs.logs.clone());
+    let cpi = compute_cpi_metrics(extract_inner_instructions(meta));
+    let flash_evidence = detect_flash_loan(&program_ids, &log_messages, &token_deltas);
+    let signature = ui_tx
+        .signatures
+        .first()
+        .cloned()
+        .unwrap_or_else(|| logs.signature.clone());
+
+    Ok(ParsedTransaction {
+        slot: tx.slot,
+        signature,
+        program_ids,
+        token_deltas,
+        cpi,
+        log_messages,
+        flash_evidence,
+        fee_payer,
+        timestamp: tx
+            .block_time
+            .unwrap_or_else(|| chrono::Utc::now().timestamp()),
+    })
+}
+
+fn extract_account_keys(message: &UiMessage) -> Vec<String> {
+    match message {
+        UiMessage::Raw(raw) => raw.account_keys.clone(),
+        UiMessage::Parsed(parsed) => parsed.account_keys.iter().map(|k| k.pubkey.clone()).collect(),
+    }
+}
+
+fn extract_program_ids(message: &UiMessage, account_keys: &[String]) -> HashSet<String> {
+    let mut program_ids = HashSet::new();
+
+    match message {
+        UiMessage::Raw(raw) => {
+            for ix in &raw.instructions {
+                if let Some(program_id) = account_keys.get(ix.program_id_index as usize) {
+                    program_ids.insert(program_id.clone());
+                }
+            }
+        }
+        UiMessage::Parsed(parsed) => {
+            for ix in &parsed.instructions {
+                if let Some(program_id) = ui_instruction_program_id(ix, account_keys) {
+                    program_ids.insert(program_id);
+                }
+            }
+        }
+    }
+
+    program_ids
+}
+
+fn extract_inner_program_ids(meta: &UiTransactionStatusMeta, account_keys: &[String]) -> HashSet<String> {
+    let mut program_ids = HashSet::new();
+
+    for group in extract_inner_instructions(meta) {
+        for ix in &group.instructions {
+            if let Some(program_id) = ui_instruction_program_id(ix, account_keys) {
+                program_ids.insert(program_id);
+            }
+        }
+    }
+
+    program_ids
+}
+
+fn ui_instruction_program_id(ix: &UiInstruction, account_keys: &[String]) -> Option<String> {
+    match ix {
+        UiInstruction::Compiled(ix) => account_keys.get(ix.program_id_index as usize).cloned(),
+        UiInstruction::Parsed(UiParsedInstruction::Parsed(ix)) => Some(ix.program_id.clone()),
+        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => Some(ix.program_id.clone()),
+    }
+}
+
+fn extract_inner_instructions(meta: &UiTransactionStatusMeta) -> &[UiInnerInstructions] {
+    match meta.inner_instructions.as_ref() {
+        OptionSerializer::Some(inner) => inner,
+        _ => &[],
+    }
+}
+
+fn extract_log_messages(meta: &UiTransactionStatusMeta) -> Option<Vec<String>> {
+    match meta.log_messages.as_ref() {
+        OptionSerializer::Some(logs) => Some(logs.clone()),
+        _ => None,
+    }
+}
 
 fn write_tvl_to_redis(
     parsed: &ParsedTransaction,
     cfg: &Config,
     redis: &mut ConnectionManager,
 ) {
-    // Find which watched protocol this tx belongs to
     let protocol = parsed
         .program_ids
         .iter()
@@ -205,12 +352,7 @@ fn write_tvl_to_redis(
 
     let Some(protocol) = protocol else { return };
 
-    // Compute net USDC delta for this tx only (not a running sum — Redis value
-    // is the delta of this tx, engine accumulates across the window)
     let net_delta_usd = net_usdc_delta_from_tx(parsed);
-
-    // We only write if there was actual USDC movement — avoids overwriting
-    // a valid TVL with 0.0 on non-USDC txs
     if net_delta_usd == 0.0 {
         return;
     }
@@ -237,95 +379,6 @@ fn write_tvl_to_redis(
     });
 }
 
-// ─── Transaction Parser ───────────────────────────────────────────────────────
-
-fn parse_geyser_transaction(
-    update: yellowstone_grpc_proto::prelude::SubscribeUpdateTransaction,
-) -> Result<ParsedTransaction> {
-    let tx_info = update
-        .transaction
-        .context("Missing transaction in update")?;
-
-    let slot = update.slot;
-
-    // Signature: raw bytes → bs58 string
-    let signature = bs58::encode(&tx_info.signature).into_string();
-
-    let tx   = tx_info.transaction.context("Missing transaction data")?;
-    let meta = tx_info.meta.context("Missing transaction meta")?;
-    let message = tx.message.context("Missing message")?;
-
-    // Account keys: raw bytes → bs58 strings, preserving index order.
-    // Index order matters: fee_payer = index 0, program_id_index references these.
-    let account_keys: Vec<String> = message
-        .account_keys
-        .iter()
-        .map(|k| bs58::encode(k).into_string())
-        .collect();
-
-    let fee_payer = account_keys.first().cloned().unwrap_or_default();
-
-    // Program IDs: each top-level instruction has a program_id_index pointing
-    // into account_keys. We resolve and deduplicate.
-    // Note: inner instruction programs are NOT captured here — they're in
-    // meta.inner_instructions. For flash loan detection we use log scanning
-    // and delta patterns to catch CPI-routed flash loans.
-    let program_ids: Vec<String> = message
-        .instructions
-        .iter()
-        .filter_map(|ix| account_keys.get(ix.program_id_index as usize))
-        .cloned()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    // Token deltas: diff pre/post balances per account
-    let token_deltas = parse_token_deltas(&meta, &account_keys);
-
-    // Log messages: raw strings from the Solana runtime
-    let log_messages = meta.log_messages.clone();
-
-    // CPI metrics: replaces the old single cpi_depth: u8
-    let cpi = compute_cpi_metrics(&meta.inner_instructions);
-
-    // Flash loan detection: runs three methods, returns structured evidence
-    let flash_evidence = detect_flash_loan(&program_ids, &log_messages, &token_deltas);
-
-    Ok(ParsedTransaction {
-        slot,
-        signature,
-        program_ids,
-        token_deltas,
-        cpi,
-        log_messages,
-        flash_evidence,
-        fee_payer,
-        timestamp: chrono::Utc::now().timestamp(),
-    })
-}
-
-// ─── Flash Loan Detection ─────────────────────────────────────────────────────
-
-/// Runs three detection methods and returns structured evidence.
-///
-/// Method 1 — Program ID match (confidence 95):
-///   Looks for known flash loan program IDs in the transaction's program list.
-///   Most reliable: if Solend's ID is there, the tx definitely used Solend flash loan.
-///   Blind spot: flash loans routed through a proxy program hide the real program ID.
-///
-/// Method 2 — Log keyword scan (confidence 70):
-///   Scans program log messages for flash loan keywords.
-///   Fallback for protocols not in our hardcoded list.
-///   Blind spot: protocols that use non-standard log strings (e.g. "borrow_execute").
-///
-/// Method 3 — Borrow+repay delta pattern (confidence 55):
-///   Detects flash loans structurally: within the same tx, the same mint has both
-///   a large outflow AND a large inflow, with near-zero net delta (borrow was repaid).
-///   Catches proxy-routed and unknown-protocol flash loans.
-///   Blind spot: large arbitrage without flash loan can look similar, but arb typically
-///   has a non-zero net delta (they keep the profit).
-///
-/// Multiple methods agreeing boosts confidence (capped at 98 — never 100%).
 fn detect_flash_loan(
     program_ids: &[String],
     log_messages: &[String],
@@ -335,7 +388,6 @@ fn detect_flash_loan(
     let mut confidence: u8 = 0;
     let mut matched_program: Option<String> = None;
 
-    // ── Method 1: Known program ID ────────────────────────────────────────────
     for pid in program_ids {
         if let Some((_, name)) = FLASH_LOAN_PROGRAMS
             .iter()
@@ -348,20 +400,16 @@ fn detect_flash_loan(
         }
     }
 
-    // ── Method 2: Log keyword scan ────────────────────────────────────────────
-    // Skip Solana runtime lines — they are not program logs and add noise.
-    // Runtime lines look like: "Program <id> invoke [2]" / "Program <id> success"
     let flash_keywords = [
         "flash_loan",
         "flashloan",
         "flash loan",
         "borrow_flash",
         "flash_borrow",
-        "flash_swap",   // Jupiter uses this term
+        "flash_swap",
     ];
 
     'log_scan: for log in log_messages {
-        // Skip runtime invoke/success/failure lines
         if log.starts_with("Program ")
             && (log.contains(" invoke ") || log.contains(" success") || log.contains(" failed"))
         {
@@ -377,18 +425,14 @@ fn detect_flash_loan(
         }
     }
 
-    // ── Method 3: Borrow+repay delta pattern ──────────────────────────────────
     let (m3_fired, max_borrow_amount) = detect_by_delta_pattern(token_deltas);
     if m3_fired {
         methods_fired |= 0b100;
         confidence = confidence.max(55);
     }
 
-    // ── Confidence boost: multiple methods agreeing ───────────────────────────
     let method_count = methods_fired.count_ones() as u8;
     if method_count >= 2 {
-        // Each additional agreeing method adds 10 points, capped at 98.
-        // (Never 100% — on-chain data can always be crafted to spoof signals.)
         confidence = (confidence + 10 * (method_count - 1)).min(98);
     }
 
@@ -405,26 +449,13 @@ fn detect_flash_loan(
     }
 }
 
-/// Method 3 implementation: detect borrow+repay structural pattern.
-///
-/// A flash loan always results in — within the same tx:
-///   - A large outflow for some mint from some account (the borrow)
-///   - A large inflow for that same mint (the repayment)
-///   - Net delta across ALL accounts for that mint ≈ 0 (the loan is repaid)
-///
-/// Key insight: net delta ≈ 0 separates flash loans from arbitrage.
-/// Arbitrage keeps the profit, so net delta for the traded token is non-zero.
-///
-/// Returns (detected: bool, max_borrow_amount_raw: u64)
 fn detect_by_delta_pattern(token_deltas: &[TokenDelta]) -> (bool, u64) {
-    // Group by mint: (net_delta_across_all_accounts, largest_single_outflow)
     let mut by_mint: HashMap<&str, (i128, u64)> = HashMap::new();
 
     for d in token_deltas {
         let entry = by_mint.entry(d.mint.as_str()).or_default();
-        entry.0 += d.delta as i128; // accumulate net delta
+        entry.0 += d.delta as i128;
         if d.delta < 0 {
-            // Track largest single outflow (the borrow leg)
             entry.1 = entry.1.max((-d.delta) as u64);
         }
     }
@@ -432,16 +463,12 @@ fn detect_by_delta_pattern(token_deltas: &[TokenDelta]) -> (bool, u64) {
     let mut max_borrow: u64 = 0;
 
     for (_mint, (net_delta, max_outflow)) in &by_mint {
-        // Filter out small amounts — below $500 USDC equivalent
         if *max_outflow < FLASH_LOAN_MIN_BORROW_RAW {
             continue;
         }
 
-        // Net delta near zero = loan was repaid.
-        // Allow up to 1% tolerance for protocol fees.
-        // e.g. borrowed $1M, repaid $1.003M (0.3% fee) → net = +$3k = 0.3% → pass
         let net_abs = net_delta.unsigned_abs() as u64;
-        let tolerance = max_outflow / 100; // 1%
+        let tolerance = max_outflow / 100;
         let is_repaid = net_abs <= tolerance;
 
         if is_repaid {
@@ -452,26 +479,7 @@ fn detect_by_delta_pattern(token_deltas: &[TokenDelta]) -> (bool, u64) {
     (max_borrow > 0, max_borrow)
 }
 
-// ─── CPI Metrics ─────────────────────────────────────────────────────────────
-
-/// Compute accurate CPI metrics from transaction inner instructions.
-///
-/// The old code did:
-///   meta.inner_instructions.iter().map(|ii| ii.instructions.len()).max()
-///
-/// This measured WIDTH (how many CPIs in one group), not DEPTH (how nested).
-/// Solana's protobuf flattens all CPIs per top-level instruction into one list.
-/// Actual depth is encoded in the `stack_height` field on each InnerInstruction,
-/// available since Solana/Agave 1.14.
-///
-/// stack_height meaning:
-///   1 = top-level instruction (not a CPI)
-///   2 = first-level CPI (called by a top-level ix)
-///   3 = second-level CPI (CPI inside a CPI)
-///   etc.
-fn compute_cpi_metrics(
-    inner_instructions: &[yellowstone_grpc_proto::prelude::InnerInstructions],
-) -> CpiMetrics {
+fn compute_cpi_metrics(inner_instructions: &[UiInnerInstructions]) -> CpiMetrics {
     if inner_instructions.is_empty() {
         return CpiMetrics::zero();
     }
@@ -487,18 +495,15 @@ fn compute_cpi_metrics(
         total_cpi_count += group.instructions.len() as u16;
 
         for ix in &group.instructions {
-            if let Some(sh) = ix.stack_height {
+            if let Some(sh) = ui_instruction_stack_height(ix) {
                 stack_height_available = true;
                 max_depth = max_depth.max(sh as u8);
             }
         }
     }
 
-    // If stack_height was not populated (older validator nodes),
-    // fall back to using max_width as a proxy for depth.
-    // This matches the old behavior but is clearly labeled as approximate.
     if !stack_height_available {
-        max_depth = max_width; // approximate — same as old cpi_depth
+        max_depth = max_width;
     }
 
     CpiMetrics {
@@ -508,50 +513,51 @@ fn compute_cpi_metrics(
     }
 }
 
-// ─── Token Delta Parser ───────────────────────────────────────────────────────
+fn ui_instruction_stack_height(ix: &UiInstruction) -> Option<u32> {
+    match ix {
+        UiInstruction::Compiled(ix) => ix.stack_height,
+        UiInstruction::Parsed(UiParsedInstruction::Parsed(ix)) => ix.stack_height,
+        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => ix.stack_height,
+    }
+}
 
 fn parse_token_deltas(
-    meta: &yellowstone_grpc_proto::prelude::TransactionStatusMeta,
+    meta: &UiTransactionStatusMeta,
     account_keys: &[String],
 ) -> Vec<TokenDelta> {
-    let mut deltas = Vec::new();
+    let empty_balances = Vec::new();
+    let pre_balances = match meta.pre_token_balances.as_ref() {
+        OptionSerializer::Some(balances) => balances,
+        _ => &empty_balances,
+    };
+    let post_balances = match meta.post_token_balances.as_ref() {
+        OptionSerializer::Some(balances) => balances,
+        _ => &empty_balances,
+    };
 
-    // Build a lookup map: account_index → pre-balance
-    // pre and post arrays are indexed by account_index, not by array position
-    let pre_map: HashMap<u32, &yellowstone_grpc_proto::prelude::TokenBalance> = meta
-        .pre_token_balances
+    let pre_map: HashMap<u8, _> = pre_balances
         .iter()
         .map(|b| (b.account_index, b))
         .collect();
 
-    for post in &meta.post_token_balances {
-        let account_idx = post.account_index;
+    let mut deltas = Vec::new();
+    for post in post_balances {
         let account = account_keys
-            .get(account_idx as usize)
+            .get(post.account_index as usize)
             .cloned()
             .unwrap_or_default();
 
-        let mint = post.mint.clone();
-
-        let post_amount: u64 = post
-            .ui_token_amount
-            .as_ref()
-            .and_then(|a| a.amount.parse::<u64>().ok())
+        let post_amount = post.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+        let pre_amount = pre_map
+            .get(&post.account_index)
+            .and_then(|b| b.ui_token_amount.amount.parse::<u64>().ok())
             .unwrap_or(0);
-
-        let pre_amount: u64 = pre_map
-            .get(&account_idx)
-            .and_then(|b| b.ui_token_amount.as_ref())
-            .and_then(|a| a.amount.parse::<u64>().ok())
-            .unwrap_or(0);
-
         let delta = post_amount as i64 - pre_amount as i64;
 
-        // Skip zero-delta entries — saves memory and speeds engine processing
         if delta != 0 {
             deltas.push(TokenDelta {
                 account,
-                mint,
+                mint: post.mint.clone(),
                 before: pre_amount,
                 after: post_amount,
                 delta,
@@ -562,28 +568,70 @@ fn parse_token_deltas(
     deltas
 }
 
-// ─── TVL Helpers ─────────────────────────────────────────────────────────────
-
-/// Compute the NET USDC flow from a single transaction.
-///
-/// OLD approach (wrong): summed `after` balances of all USDC accounts touched.
-/// This inflates TVL because it includes user wallets, not just protocol vaults,
-/// and counts the same liquidity multiple times if it touched multiple accounts.
-///
-/// NEW approach: sum the signed deltas. Positive = USDC entered accounts (deposits).
-/// Negative = USDC left accounts (withdrawals). Net = change in total USDC
-/// in the accounts this tx touched.
-///
-/// This is written to Redis by geyser.rs and read by engine.rs.
-/// Still imperfect (doesn't distinguish vault vs user wallet), but far more
-/// accurate than summing `after` balances.
-///
-/// Phase 2: Replace with a separate account subscription that tracks
-/// only the protocol vault pubkeys.
 pub fn net_usdc_delta_from_tx(tx: &ParsedTransaction) -> f64 {
     tx.token_deltas
         .iter()
         .filter(|d| d.mint == USDC_MINT)
-        .map(|d| d.delta as f64 / 1_000_000.0) // USDC has 6 decimals
+        .map(|d| d.delta as f64 / 1_000_000.0)
         .sum()
+}
+
+fn subscriber_rpc_url(cfg: &Config) -> String {
+    if looks_like_helius_host(&cfg.solana_rpc_url) {
+        return ensure_api_key_query(http_url(&cfg.solana_rpc_url), &cfg.helius_api_key);
+    }
+
+    if looks_like_helius_host(&cfg.geyser_endpoint) {
+        return ensure_api_key_query(http_url(&cfg.geyser_endpoint), &cfg.helius_api_key);
+    }
+
+    cfg.solana_rpc_url.clone()
+}
+
+fn websocket_url(cfg: &Config) -> String {
+    if looks_like_helius_host(&cfg.geyser_endpoint) {
+        return ensure_api_key_query(ws_url(&cfg.geyser_endpoint), &cfg.helius_api_key);
+    }
+
+    if looks_like_helius_host(&cfg.solana_rpc_url) {
+        return ensure_api_key_query(ws_url(&cfg.solana_rpc_url), &cfg.helius_api_key);
+    }
+
+    ws_url(&cfg.solana_rpc_url)
+}
+
+fn looks_like_helius_host(url: &str) -> bool {
+    url.contains("helius-rpc.com")
+}
+
+fn http_url(url: &str) -> String {
+    if url.starts_with("wss://") {
+        url.replacen("wss://", "https://", 1)
+    } else if url.starts_with("ws://") {
+        url.replacen("ws://", "http://", 1)
+    } else {
+        url.to_string()
+    }
+}
+
+fn ws_url(url: &str) -> String {
+    if url.starts_with("https://") {
+        url.replacen("https://", "wss://", 1)
+    } else if url.starts_with("http://") {
+        url.replacen("http://", "ws://", 1)
+    } else {
+        url.to_string()
+    }
+}
+
+fn ensure_api_key_query(url: String, api_key: &str) -> String {
+    if api_key.is_empty() || url.contains("api-key=") {
+        return url;
+    }
+
+    if url.contains('?') {
+        format!("{}&api-key={}", url, api_key)
+    } else {
+        format!("{}?api-key={}", url, api_key)
+    }
 }

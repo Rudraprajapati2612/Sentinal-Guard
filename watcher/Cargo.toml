@@ -18,6 +18,7 @@ tonic          = { version = "0.14", features = ["tls-native-roots"] }
 # ── Solana ───────────────────────────────────────────────────────────────────
 solana-sdk        = "2.0"
 solana-client     = "2.0"
+solana-transaction-status-client-types = "2.0"
 anchor-client     = { version = "0.32.1", features = ["async"] }
 anchor-lang       = "0.32.1"
  
@@ -56,3 +57,4 @@ chrono            = { version = "0.4", features = ["serde"] }
 uuid              = { version = "1",   features = ["v4", "serde"] }
 dotenvy           = "0.15"
 dashmap           = "6"
+hex = "0.4.3"

@@ -4,9 +4,9 @@ use anyhow ::{Context,Result};
 
 pub struct Config{
      // ── Solana ────────────────────────────────────────────────────────────────
-    /// Helius Geyser gRPC endpoint, e.g. "https://atlas-devnet.helius-rpc.com"
+    /// Subscriber endpoint base URL, reused to derive WebSocket/RPC URLs.
     pub geyser_endpoint: String,
-    /// Helius API key (used as x-token header for Geyser auth)
+    /// Helius API key, appended as ?api-key=... for Helius WebSocket/RPC access
     pub helius_api_key: String,
     /// Standard JSON-RPC endpoint for submitting transactions
     pub solana_rpc_url: String,

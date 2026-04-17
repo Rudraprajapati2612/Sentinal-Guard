@@ -1,22 +1,16 @@
-// watcher/src/db.rs
-//
-// PostgreSQL connection pool and all query functions.
-// Uses sqlx with compile-time query checking (sqlx::query_as!).
-// Run `sqlx migrate run` before using — see scripts/schema.sql.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing::info;
 use uuid::Uuid;
-
+use serde::Serialize;
 use crate::config::Config;
 
 pub type DbPool = PgPool;
 
-// ─── Row types ────────────────────────────────────────────────────────────────
- 
-#[derive(Debug, sqlx::FromRow)]
+// ─── Row types ─────────────────────────────────────────────
+
+#[derive(Debug, sqlx::FromRow, Serialize)]
 pub struct AlertRow {
     pub id: Uuid,
     pub alert_id_hex: String,
@@ -50,61 +44,59 @@ pub struct BridgeOutflowRow {
     pub captured_at: DateTime<Utc>,
 }
 
-// ─── Connection ───────────────────────────────────────────────────────────────
+// ─── Connection ────────────────────────────────────────────
 
 pub async fn connect(cfg: &Config) -> Result<DbPool> {
     let pool = PgPoolOptions::new()
         .max_connections(cfg.db_pool_size)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .idle_timeout(std::time::Duration::from_secs(30))
+        .max_lifetime(std::time::Duration::from_secs(300))
         .connect(&cfg.database_url)
         .await?;
 
-    // Run any pending migrations
+    // Run migrations
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     info!("PostgreSQL pool ready ({} max connections)", cfg.db_pool_size);
     Ok(pool)
 }
 
-// ─── Writes ───────────────────────────────────────────────────────────────────
+// ─── Writes ────────────────────────────────────────────────
 
-/// Persist a fired alert. Called by detection engine before dispatching.
-/// This is the crash-safe write — alert is in DB before any response fires.
 pub async fn insert_alert(
     pool: &DbPool,
     alert: &crate::types::AlertEvent,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    let severity = alert.severity as i16;
-    let slot = alert.slot as i64;
-    let rule = alert.rule_triggered.to_string();
-    let sigs = serde_json::to_value(&alert.trigger_tx_signatures)?;
+    let trigger_signatures = serde_json::to_value(&alert.trigger_tx_signatures)?;
+    let rule_triggered = alert.rule_triggered.to_string();
 
-    sqlx::query!(
+    sqlx::query(
         r#"
         INSERT INTO alerts (
             id, alert_id_hex, protocol, severity, rule_triggered,
             estimated_at_risk_usd, trigger_signatures, slot, watcher_pubkey
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
         ON CONFLICT (alert_id_hex) DO NOTHING
         "#,
-        id,
-        alert.alert_id_hex,
-        alert.protocol,
-        severity,
-        rule,
-        alert.estimated_at_risk_usd,
-        sigs,
-        slot,
-        alert.watcher_pubkey,
     )
+    .bind(id)
+    .bind(&alert.alert_id_hex)
+    .bind(&alert.protocol)
+    .bind(alert.severity as i16)
+    .bind(rule_triggered.as_str())
+    .bind(alert.estimated_at_risk_usd)
+    .bind(trigger_signatures)
+    .bind(alert.slot as i64)
+    .bind(&alert.watcher_pubkey)
     .execute(pool)
     .await?;
 
     Ok(id)
 }
 
-/// Update alert with the on-chain pause transaction signature after it lands.
 pub async fn update_alert_on_chain_tx(
     pool: &DbPool,
     alert_id_hex: &str,
@@ -117,32 +109,32 @@ pub async fn update_alert_on_chain_tx(
     )
     .execute(pool)
     .await?;
+
     Ok(())
 }
 
-/// Record a TVL snapshot for Rule 2 historical baseline.
 pub async fn insert_tvl_snapshot(
     pool: &DbPool,
     protocol: &str,
     tvl_usd: f64,
     slot: u64,
 ) -> Result<()> {
-    sqlx::query!(
+    sqlx::query(
         r#"
         INSERT INTO tvl_snapshots (id, protocol, tvl_usd, slot)
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1,$2,$3,$4)
         "#,
-        Uuid::new_v4(),
-        protocol,
-        tvl_usd,
-        slot as i64,
     )
+    .bind(Uuid::new_v4())
+    .bind(protocol)
+    .bind(tvl_usd)
+    .bind(slot as i64)
     .execute(pool)
     .await?;
+
     Ok(())
 }
 
-/// Record a bridge outflow for Rule 3 baseline computation.
 pub async fn insert_bridge_outflow(
     pool: &DbPool,
     protocol: &str,
@@ -150,26 +142,29 @@ pub async fn insert_bridge_outflow(
     slot: u64,
     source_wallet: &str,
 ) -> Result<()> {
-    sqlx::query!(
+    sqlx::query(
         r#"
         INSERT INTO bridge_outflows (id, protocol, outflow_usd, slot, source_wallet)
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1,$2,$3,$4,$5)
         "#,
-        Uuid::new_v4(),
-        protocol,
-        outflow_usd,
-        slot as i64,
-        source_wallet,
     )
+    .bind(Uuid::new_v4())
+    .bind(protocol)
+    .bind(outflow_usd)
+    .bind(slot as i64)
+    .bind(source_wallet)
     .execute(pool)
     .await?;
+
     Ok(())
 }
 
-// ─── Reads ────────────────────────────────────────────────────────────────────
+// ─── Reads ────────────────────────────────────────────────
 
-/// Fetch last N alerts for the REST feed endpoint.
-pub async fn get_recent_alerts(pool: &DbPool, limit: i64) -> Result<Vec<AlertRow>> {
+pub async fn get_recent_alerts(
+    pool: &DbPool,
+    limit: i64,
+) -> Result<Vec<AlertRow>> {
     let rows = sqlx::query_as!(
         AlertRow,
         "SELECT * FROM alerts ORDER BY created_at DESC LIMIT $1",
@@ -177,10 +172,10 @@ pub async fn get_recent_alerts(pool: &DbPool, limit: i64) -> Result<Vec<AlertRow
     )
     .fetch_all(pool)
     .await?;
+
     Ok(rows)
 }
 
-/// Fetch alerts for a specific protocol.
 pub async fn get_alerts_for_protocol(
     pool: &DbPool,
     protocol: &str,
@@ -194,26 +189,26 @@ pub async fn get_alerts_for_protocol(
     )
     .fetch_all(pool)
     .await?;
+
     Ok(rows)
 }
 
-/// Get the 10-minute rolling average bridge outflow for a source wallet.
-/// Used by Rule 3 to compute spike ratio.
+/// ✅ FIXED: proper scalar query
 pub async fn get_bridge_outflow_avg(
     pool: &DbPool,
     source_wallet: &str,
     window_minutes: i64,
 ) -> Result<f64> {
-    let avg = sqlx::query_scalar!(
+    let avg = sqlx::query_scalar::<_, Option<f64>>(
         r#"
-        SELECT COALESCE(AVG(outflow_usd), 0.0)
+        SELECT AVG(outflow_usd)
         FROM bridge_outflows
         WHERE source_wallet = $1
-          AND captured_at > NOW() - ($2 || ' minutes')::INTERVAL
-        "#,
-        source_wallet,
-        window_minutes.to_string(),
+          AND captured_at > NOW() - make_interval(mins => $2)
+        "#
     )
+    .bind(source_wallet)
+    .bind(window_minutes as i32)
     .fetch_one(pool)
     .await?;
 
