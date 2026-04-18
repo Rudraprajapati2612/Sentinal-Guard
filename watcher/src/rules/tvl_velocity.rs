@@ -19,13 +19,27 @@ pub fn score(window: &[&SlotSnapshot], threshold: f64) -> u8 {
     let oldest_tvl = recent.first().map(|s| s.tvl_usd).unwrap_or(0.0);
     let newest_tvl = recent.last().map(|s| s.tvl_usd).unwrap_or(0.0);
 
-    if oldest_tvl <= 0.0 {
+    // GUARD 1: Need meaningful TVL to compute a velocity signal.
+    // $50k minimum — below this, percentage math is noise.
+    if oldest_tvl < 50_000.0 {
         return 0;
     }
 
-    let drop_fraction = (oldest_tvl - newest_tvl) / oldest_tvl;
+    // GUARD 2: Must be a drop, not flat or rising
+    if newest_tvl >= oldest_tvl {
+        return 0;
+    }
 
-    if drop_fraction > threshold {
+    // GUARD 3: Minimum absolute drop — percentage alone is misleading.
+    // A 50% drop must represent at least $10k in real USD lost.
+    let absolute_drop = oldest_tvl - newest_tvl;
+    if absolute_drop < 10_000.0 {
+        return 0;
+    }
+
+    let drop_fraction = absolute_drop / oldest_tvl;
+
+    if drop_fraction >= threshold {
         // Base score 75 at threshold, scales up with drop severity
         let raw = 75.0 + (drop_fraction - threshold) * 100.0;
         raw.min(99.0) as u8

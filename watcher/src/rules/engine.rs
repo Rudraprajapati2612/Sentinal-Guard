@@ -91,7 +91,10 @@ pub async fn run(
                         // the engine from crashing during Redis cold-start.
                         crate::geyser::net_usdc_delta_from_tx(&tx).abs()
                     });
-
+                    debug!( 
+                    "Slot {} TVL read: ${:.0} (protocol={}...)",
+                    tx.slot, tvl, &protocol[..8]
+                    ); 
                 let bridge_outflow = compute_bridge_outflow(&tx);
 
                 // Same slot → merge into existing snapshot (multiple txs per slot is normal)
@@ -137,7 +140,8 @@ pub async fn run(
                     &window_slice,
                     cfg.bridge_spike_multiplier,
                 );
-
+                // After computing scores, log them
+              
                 // Take the highest-scoring rule — one alert per slot per protocol
                 let (max_score, fired_rule) = [
                     (score1, RuleType::FlashLoanDrain),
@@ -147,7 +151,11 @@ pub async fn run(
                 .into_iter()
                 .max_by_key(|(s, _)| *s)
                 .unwrap();
-
+                  debug!(
+                    "Scores: R1={} R2={} R3={} max={} threshold={}",
+                    score1, score2, score3, max_score, 
+                    cfg.min_severity_to_pause.min(cfg.min_severity_to_publish)
+                );
                 // Below both alert thresholds — nothing to do
                 let min_threshold = cfg
                     .min_severity_to_pause
@@ -192,6 +200,30 @@ pub async fn run(
                     fired_rule,
                     &watcher_pubkey,
                 );
+
+                // ── Per-protocol cooldown ──────────────────────────────────────
+                // Prevents alert storms when TVL oscillates across threshold.
+                // After one alert fires for a protocol, suppress for 30s.
+                let cooldown_key = format!("alert_cooldown:{}", protocol);
+                let on_cooldown: bool = redis::cmd("EXISTS")
+                    .arg(&cooldown_key)
+                    .query_async(&mut redis)
+                    .await
+                    .unwrap_or(false);
+
+                if on_cooldown {
+                    debug!("Protocol {} on alert cooldown — skipping", &protocol[..8]);
+                    continue;
+                }
+
+                // Set cooldown BEFORE dispatching (crash safety)
+                let _: Result<(), _> = redis::cmd("SET")
+                    .arg(&cooldown_key)
+                    .arg(1u8)
+                    .arg("EX")
+                    .arg(30u64) // 30 second cooldown per protocol
+                    .query_async(&mut redis)
+                    .await;
 
                 // ── Dedup via Redis ────────────────────────────────────────────
                 // Prevents re-firing the same alert if the engine restarts mid-attack.

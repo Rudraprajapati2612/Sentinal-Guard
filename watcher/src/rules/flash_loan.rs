@@ -167,6 +167,7 @@ pub fn explain(window: &[&SlotSnapshot]) -> String {
     )
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
