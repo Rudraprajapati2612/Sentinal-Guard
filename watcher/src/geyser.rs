@@ -22,7 +22,7 @@ use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     sync::{broadcast, mpsc},
@@ -37,8 +37,10 @@ use crate::types::{CpiMetrics, FlashLoanEvidence, ParsedTransaction, TokenDelta,
 const FLASH_LOAN_PROGRAMS: &[(&str, &str)] = &[
     ("So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo", "Solend"),
     ("MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD", "Marginfi"),
-    ("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", "Orca Whirlpool"),
-    ("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "Jupiter"),
+    (
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "Orca Whirlpool",
+    ),
 ];
 
 /// Known bridge program IDs — used in engine.rs for bridge outflow detection.
@@ -79,13 +81,14 @@ pub async fn run(
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<SubscriberEvent>();
     let mut join_set = JoinSet::new();
+    let watched_programs = cfg.watched_programs.clone();
 
-    for program_id in cfg.watched_programs.clone() {
+    {
         let pubsub = Arc::clone(&pubsub);
         let event_tx = event_tx.clone();
 
         join_set.spawn(async move {
-            let filter = RpcTransactionLogsFilter::All;
+            let filter = RpcTransactionLogsFilter::Mentions(watched_programs.clone());
             let config = RpcTransactionLogsConfig {
                 commitment: Some(CommitmentConfig::processed()),
             };
@@ -94,15 +97,18 @@ pub async fn run(
                 Ok(parts) => parts,
                 Err(e) => {
                     let _ = event_tx.send(SubscriberEvent::Error(anyhow::anyhow!(
-                        "WebSocket subscribe failed for {}: {}",
-                        program_id,
+                        "WebSocket subscribe failed for {:?}: {}",
+                        watched_programs,
                         e
                     )));
                     return;
                 }
             };
 
-            info!("WebSocket subscription active for {}", program_id);
+            info!(
+                "WebSocket subscription active for {} watched programs",
+                watched_programs.len()
+            );
 
             while let Some(resp) = stream.next().await {
                 if resp.value.err.is_none() {
@@ -112,8 +118,8 @@ pub async fn run(
 
             unsubscribe().await;
             let _ = event_tx.send(SubscriberEvent::Error(anyhow::anyhow!(
-                "WebSocket stream ended for {}",
-                program_id
+                "WebSocket stream ended for {:?}",
+                watched_programs
             )));
         });
     }
@@ -134,7 +140,7 @@ pub async fn run(
 
                 match event {
                     SubscriberEvent::Log(logs) => {
-                        println!("TX received: {}", logs.signature);        
+                        println!("TX received: {}", logs.signature);
                         prune_seen_signatures(&mut seen_signatures);
                         if seen_signatures.contains_key(&logs.signature) {
                             continue;
@@ -144,8 +150,10 @@ pub async fn run(
                         match fetch_transaction_via_rpc(&rpc, &logs).await {
                             Ok(parsed) => {
                                 println!("Parsed Tx:{}",parsed.signature);
+                                println!("Programs: {:?}", parsed.program_ids);
+                                println!("Token deltas: {:?}", parsed.token_deltas);
                                 processed += 1;
-                                
+
                                 if processed % 100 == 0 {
                                     debug!("Processed {} txs ({} errors)", processed, errors);
                                 }
@@ -188,7 +196,7 @@ pub async fn run(
 }
 
 fn prune_seen_signatures(seen_signatures: &mut HashMap<String, Instant>) {
-    const KEEP_FOR: Duration = Duration::from_secs(90);
+    const KEEP_FOR: Duration = Duration::from_secs(30);
     let now = Instant::now();
     seen_signatures.retain(|_, inserted_at| now.duration_since(*inserted_at) < KEEP_FOR);
 }
@@ -212,7 +220,9 @@ async fn fetch_transaction_via_rpc(
             Ok(tx) => return parse_rpc_transaction(tx, logs),
             Err(e) => {
                 last_error = Some(e);
-                tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
+                let base_delay_ms = (250 * (2_u64.pow(attempt))).min(4_000);
+                let jitter_ms = retry_jitter_ms();
+                tokio::time::sleep(Duration::from_millis(base_delay_ms + jitter_ms)).await;
             }
         }
     }
@@ -238,7 +248,11 @@ fn parse_rpc_transaction(
 
     let ui_tx = match &tx.transaction.transaction {
         EncodedTransaction::Json(ui_tx) => ui_tx,
-        _ => return Err(anyhow::anyhow!("RPC response did not return JSON transaction data")),
+        _ => {
+            return Err(anyhow::anyhow!(
+                "RPC response did not return JSON transaction data"
+            ))
+        }
     };
 
     let account_keys = extract_account_keys(&ui_tx.message);
@@ -276,7 +290,11 @@ fn parse_rpc_transaction(
 fn extract_account_keys(message: &UiMessage) -> Vec<String> {
     match message {
         UiMessage::Raw(raw) => raw.account_keys.clone(),
-        UiMessage::Parsed(parsed) => parsed.account_keys.iter().map(|k| k.pubkey.clone()).collect(),
+        UiMessage::Parsed(parsed) => parsed
+            .account_keys
+            .iter()
+            .map(|k| k.pubkey.clone())
+            .collect(),
     }
 }
 
@@ -303,7 +321,10 @@ fn extract_program_ids(message: &UiMessage, account_keys: &[String]) -> HashSet<
     program_ids
 }
 
-fn extract_inner_program_ids(meta: &UiTransactionStatusMeta, account_keys: &[String]) -> HashSet<String> {
+fn extract_inner_program_ids(
+    meta: &UiTransactionStatusMeta,
+    account_keys: &[String],
+) -> HashSet<String> {
     let mut program_ids = HashSet::new();
 
     for group in extract_inner_instructions(meta) {
@@ -321,7 +342,9 @@ fn ui_instruction_program_id(ix: &UiInstruction, account_keys: &[String]) -> Opt
     match ix {
         UiInstruction::Compiled(ix) => account_keys.get(ix.program_id_index as usize).cloned(),
         UiInstruction::Parsed(UiParsedInstruction::Parsed(ix)) => Some(ix.program_id.clone()),
-        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => Some(ix.program_id.clone()),
+        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => {
+            Some(ix.program_id.clone())
+        }
     }
 }
 
@@ -338,12 +361,7 @@ fn extract_log_messages(meta: &UiTransactionStatusMeta) -> Option<Vec<String>> {
         _ => None,
     }
 }
-
-fn write_tvl_to_redis(
-    parsed: &ParsedTransaction,
-    cfg: &Config,
-    redis: &mut ConnectionManager,
-) {
+fn write_tvl_to_redis(parsed: &ParsedTransaction, cfg: &Config, redis: &mut ConnectionManager) {
     let protocol = parsed
         .program_ids
         .iter()
@@ -352,32 +370,100 @@ fn write_tvl_to_redis(
 
     let Some(protocol) = protocol else { return };
 
-    let net_delta_usd = net_usdc_delta_from_tx(parsed);
-    if net_delta_usd == 0.0 {
+    let largest_usdc_balance = parsed
+        .token_deltas
+        .iter()
+        .filter(|d| d.mint == USDC_MINT && d.after > 1_000_000_000)
+        .map(|d| d.after as f64 / 1_000_000.0)
+        .fold(0.0, f64::max);
+
+    if largest_usdc_balance < 1.0 {
         return;
     }
+    println!("USDC candidate: {}", largest_usdc_balance);
 
-    let cache = TvlCache {
-        protocol: protocol.clone(),
-        tvl_usd: net_delta_usd,
-        slot: parsed.slot,
-        updated_at: parsed.timestamp,
-    };
-
+    let slot = parsed.slot;
+    let timestamp = parsed.timestamp;
     let key = format!("tvl:{}", protocol);
-    let val = serde_json::to_string(&cache).unwrap_or_default();
+    let signature = parsed.signature.clone();
+
     let mut r = redis.clone();
 
     tokio::spawn(async move {
-        let _: Result<(), _> = redis::cmd("SET")
+        println!("WRITING TVL → {}", largest_usdc_balance);
+        let cache = TvlCache {
+            protocol: protocol.clone(),
+            tvl_usd: largest_usdc_balance,
+            slot,
+            updated_at: timestamp,
+        };
+
+        let val = serde_json::to_string(&cache).unwrap_or_default();
+
+        if let Err(e) = redis::cmd("SET")
             .arg(&key)
             .arg(&val)
             .arg("EX")
-            .arg(30u64)
-            .query_async(&mut r)
-            .await;
+            .arg(60u64)
+            .query_async::<()>(&mut r)
+            .await
+        {
+            error!(
+                "Redis write failed for protocol {} tx {} slot {}: {}",
+                protocol, signature, slot, e
+            );
+        }
     });
 }
+//     let Some(protocol) = protocol else { return };
+
+//     let delta = net_usdc_delta_from_tx(parsed);
+
+//     // ignore noise
+//     if delta.abs() < 0.5 {
+//         return;
+//     }
+
+//     // ✅ EXTRACT VALUES HERE (IMPORTANT)
+//     let slot = parsed.slot;
+//     let timestamp = parsed.timestamp;
+//     let protocol_clone = protocol.clone();
+//     let key = format!("tvl:{}", protocol);
+
+//     let mut r = redis.clone();
+
+//     tokio::spawn(async move {
+//         let prev: Option<String> = redis::cmd("GET")
+//             .arg(&key)
+//             .query_async(&mut r)
+//             .await
+//             .ok();
+
+//         let prev_tvl: f64 = prev
+//             .and_then(|s| serde_json::from_str::<TvlCache>(&s).ok())
+//             .map(|t| t.tvl_usd)
+//             .unwrap_or(1_000_000.0);
+
+//         let new_tvl = (prev_tvl + delta).max(0.0);
+
+//         let cache = TvlCache {
+//             protocol: protocol_clone,
+//             tvl_usd: new_tvl,
+//             slot,
+//             updated_at: timestamp,
+//         };
+
+//         let val = serde_json::to_string(&cache).unwrap_or_default();
+
+//         let _: Result<(), _> = redis::cmd("SET")
+//             .arg(&key)
+//             .arg(&val)
+//             .arg("EX")
+//             .arg(60u64)
+//             .query_async(&mut r)
+//             .await;
+//     });
+// }
 
 fn detect_flash_loan(
     program_ids: &[String],
@@ -521,10 +607,7 @@ fn ui_instruction_stack_height(ix: &UiInstruction) -> Option<u32> {
     }
 }
 
-fn parse_token_deltas(
-    meta: &UiTransactionStatusMeta,
-    account_keys: &[String],
-) -> Vec<TokenDelta> {
+fn parse_token_deltas(meta: &UiTransactionStatusMeta, account_keys: &[String]) -> Vec<TokenDelta> {
     let empty_balances = Vec::new();
     let pre_balances = match meta.pre_token_balances.as_ref() {
         OptionSerializer::Some(balances) => balances,
@@ -535,10 +618,7 @@ fn parse_token_deltas(
         _ => &empty_balances,
     };
 
-    let pre_map: HashMap<u8, _> = pre_balances
-        .iter()
-        .map(|b| (b.account_index, b))
-        .collect();
+    let pre_map: HashMap<u8, _> = pre_balances.iter().map(|b| (b.account_index, b)).collect();
 
     let mut deltas = Vec::new();
     for post in post_balances {
@@ -571,9 +651,17 @@ fn parse_token_deltas(
 pub fn net_usdc_delta_from_tx(tx: &ParsedTransaction) -> f64 {
     tx.token_deltas
         .iter()
-        .filter(|d| d.mint == USDC_MINT)
+        .filter(|d| d.mint == USDC_MINT && d.delta.abs() > 1000)
         .map(|d| d.delta as f64 / 1_000_000.0)
-        .sum()
+        .max_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap())
+        .unwrap_or(0.0)
+}
+
+fn retry_jitter_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| (duration.subsec_nanos() as u64) % 100)
+        .unwrap_or(0)
 }
 
 fn subscriber_rpc_url(cfg: &Config) -> String {
