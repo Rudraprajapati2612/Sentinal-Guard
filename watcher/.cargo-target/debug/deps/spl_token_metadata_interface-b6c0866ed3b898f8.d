@@ -1,8 +1,0 @@
-/home/rudra2612/Projects/sentinel-guard/watcher/.cargo-target/debug/deps/spl_token_metadata_interface-b6c0866ed3b898f8.d: /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/lib.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/error.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/instruction.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/state.rs
-
-/home/rudra2612/Projects/sentinel-guard/watcher/.cargo-target/debug/deps/libspl_token_metadata_interface-b6c0866ed3b898f8.rmeta: /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/lib.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/error.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/instruction.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/state.rs
-
-/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/lib.rs:
-/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/error.rs:
-/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/instruction.rs:
-/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-metadata-interface-0.7.0/src/state.rs:
