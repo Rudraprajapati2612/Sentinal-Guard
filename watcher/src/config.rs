@@ -16,6 +16,10 @@ pub struct Config{
     pub sentinel_program_id: String,
     /// Program IDs to watch — comma-separated in env var
     pub watched_programs: Vec<String>,
+    /// Mint used for mint-specific flow calculations
+    pub tracked_mint: String,
+
+    pub protocol_authority: String,
     // ── Redis ─────────────────────────────────────────────────────────────────
     /// Redis connection URL, e.g. "redis://127.0.0.1:6379"
     pub redis_url: String,
@@ -77,7 +81,12 @@ pub fn load() -> Result<Config> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect(),
- 
+
+        tracked_mint: std::env::var("TRACKED_MINT")
+            .unwrap_or_else(|_| "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string()),
+        
+            protocol_authority: std::env::var("PROTOCOL_AUTHORITY")
+    .unwrap_or_default(),
         // ── Redis ─────────────────────────────────────────────────────────────
         redis_url: std::env::var("REDIS_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),

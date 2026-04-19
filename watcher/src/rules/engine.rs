@@ -86,10 +86,7 @@ pub async fn run(
                 let tvl = read_tvl_from_redis(&mut redis, &protocol)
                     .await
                     .unwrap_or_else(|_| {
-                        // Fallback: use net USDC delta from this tx as a rough TVL proxy.
-                        // This is inaccurate (single tx, not cumulative) but prevents
-                        // the engine from crashing during Redis cold-start.
-                        crate::geyser::net_usdc_delta_from_tx(&tx).abs()
+                        crate::geyser::largest_token_balance_usd_from_tx(&tx)
                     });
                     debug!( 
                     "Slot {} TVL read: ${:.0} (protocol={}...)",
@@ -196,6 +193,7 @@ pub async fn run(
                 let alert = build_alert(
                     &tx,
                     &protocol,
+                     &cfg.protocol_authority, 
                     max_score,
                     fired_rule,
                     &watcher_pubkey,
@@ -342,6 +340,7 @@ fn compute_bridge_outflow(tx: &ParsedTransaction) -> f64 {
 fn build_alert(
     tx: &ParsedTransaction,
     protocol: &str,
+    protocol_authority: &str,
     severity: u8,
     rule: RuleType,
     watcher_pubkey: &str,
@@ -371,6 +370,7 @@ fn build_alert(
         alert_id,
         alert_id_hex,
         protocol: protocol.to_string(),
+        protocol_authority: protocol_authority.to_string(),  // ← ADD
         severity,
         rule_triggered: rule,
         estimated_at_risk_usd: estimated_at_risk,

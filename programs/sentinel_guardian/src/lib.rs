@@ -1,35 +1,28 @@
 use anchor_lang::prelude::*;
 
-declare_id!("3qkLJYYQfXK1GJWkPicuNtQnsme5WoZYkUfdqYrGrc1y");
-
+declare_id!("2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs");
 #[program]
 pub mod sentinel_guardian {
     use super::*;
 
-    pub fn register_protocol(
-        ctx: Context<RegisterProtocol>,
-        escrow_amount: u64,
-    ) -> Result<()> {
-    
-        
+    pub fn register_protocol(ctx: Context<RegisterProtocol>, escrow_amount: u64) -> Result<()> {
         let sentinel_info = ctx.accounts.sentinel_state.to_account_info();
         let protocol_info = ctx.accounts.protocol_authority.to_account_info();
-    
-        
+
         if escrow_amount > 0 {
             let cpi_ctx = CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
                 anchor_lang::system_program::Transfer {
-                    from: protocol_info.clone(),    
-                    to: sentinel_info.clone(),     
+                    from: protocol_info.clone(),
+                    to: sentinel_info.clone(),
                 },
             );
             anchor_lang::system_program::transfer(cpi_ctx, escrow_amount)?;
         }
-    
+
         // ✅ STEP 3: NOW take mutable borrow (SAFE)
         let state = &mut ctx.accounts.sentinel_state;
-    
+
         state.protocol_address = ctx.accounts.protocol_authority.key();
         state.paused = false;
         state.pause_count = 0;
@@ -37,14 +30,14 @@ pub mod sentinel_guardian {
         state.escrow_balance = escrow_amount;
         state.authority = ctx.accounts.watcher_authority.key();
         state.bump = ctx.bumps.sentinel_state;
-    
+
         msg!(
             "Protocol registered: {}, watcher: {}, escrow: {}",
             state.protocol_address,
             state.authority,
             escrow_amount
         );
-    
+
         Ok(())
     }
 
@@ -52,7 +45,7 @@ pub mod sentinel_guardian {
         ctx: Context<PauseWithdrawals>,
         alert_id: [u8; 32],
         severity: u8,
-        rule_triggered: u8,         // which rule fired
+        rule_triggered: u8, // which rule fired
         estimated_at_risk: u64,
     ) -> Result<()> {
         let state = &mut ctx.accounts.sentinel_state;
@@ -109,10 +102,13 @@ pub mod sentinel_guardian {
             slot: Clock::get()?.slot,
         });
 
-        msg!("Protocol unpaused by: {}", ctx.accounts.protocol_authority.key());
+        msg!(
+            "Protocol unpaused by: {}",
+            ctx.accounts.protocol_authority.key()
+        );
         Ok(())
     }
-   
+
     pub fn validate_alert(ctx: Context<ValidateAlert>) -> Result<()> {
         let alert = &mut ctx.accounts.alert_record;
         require!(!alert.validated, SentinelError::AlreadyValidated);
@@ -121,10 +117,7 @@ pub mod sentinel_guardian {
         Ok(())
     }
 
-    pub fn claim_bounty(
-        ctx: Context<ClaimBounty>,
-        alert_id: [u8; 32],
-    ) -> Result<()> {
+    pub fn claim_bounty(ctx: Context<ClaimBounty>, alert_id: [u8; 32]) -> Result<()> {
         // Read everything first — no borrow conflict
         let validated = ctx.accounts.alert_record.validated;
         let bounty_claimed = ctx.accounts.alert_record.bounty_claimed;
@@ -152,8 +145,16 @@ pub mod sentinel_guardian {
         );
 
         // Transfer lamports from PDA to watcher
-        **ctx.accounts.sentinel_state.to_account_info().try_borrow_mut_lamports()? -= bounty_amount;
-        **ctx.accounts.watcher.to_account_info().try_borrow_mut_lamports()? += bounty_amount;
+        **ctx
+            .accounts
+            .sentinel_state
+            .to_account_info()
+            .try_borrow_mut_lamports()? -= bounty_amount;
+        **ctx
+            .accounts
+            .watcher
+            .to_account_info()
+            .try_borrow_mut_lamports()? += bounty_amount;
 
         // Now mutably borrow to update state
         ctx.accounts.sentinel_state.escrow_balance -= bounty_amount;
@@ -212,7 +213,7 @@ pub struct PauseWithdrawals<'info> {
     #[account(mut)]
     pub watcher: Signer<'info>,
 
-    pub system_program: Program<'info, System>,  // required for alert_record init
+    pub system_program: Program<'info, System>, // required for alert_record init
 }
 
 #[derive(Accounts)]
@@ -282,7 +283,7 @@ pub struct AlertRecord {
     pub alert_id: [u8; 32],
     pub protocol: Pubkey,
     pub severity: u8,
-    pub rule_triggered: u8,       // 1=flash_loan, 2=tvl_velocity, 3=bridge_spike
+    pub rule_triggered: u8, // 1=flash_loan, 2=tvl_velocity, 3=bridge_spike
     pub estimated_at_risk: u64,
     pub watcher: Pubkey,
     pub validated: bool,

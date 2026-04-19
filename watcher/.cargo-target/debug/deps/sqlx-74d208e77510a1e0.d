@@ -1,0 +1,12 @@
+/home/rudra2612/Projects/sentinel-guard/watcher/.cargo-target/debug/deps/sqlx-74d208e77510a1e0.d: /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/mod.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/mod.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/ty_match.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/spec_error.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.md /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/test.md /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/install_drivers_note.md
+
+/home/rudra2612/Projects/sentinel-guard/watcher/.cargo-target/debug/deps/libsqlx-74d208e77510a1e0.rmeta: /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/mod.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/mod.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/ty_match.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/spec_error.rs /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.md /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/test.md /home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/install_drivers_note.md
+
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.rs:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/mod.rs:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/mod.rs:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/ty_match.rs:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/spec_error.rs:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/lib.md:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/macros/test.md:
+/home/rudra2612/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-0.8.6/src/any/install_drivers_note.md:

@@ -52,15 +52,15 @@ pub async fn submit_pause(
     let program_id = Pubkey::from_str(&cfg.sentinel_program_id)
         .map_err(|e| anyhow::anyhow!("Invalid program ID: {}", e))?;
 
-    let protocol_pubkey = Pubkey::from_str(&alert.protocol)
-        .map_err(|e| anyhow::anyhow!("Invalid protocol pubkey: {}", e))?;
-
+let protocol_authority = Pubkey::from_str(&alert.protocol_authority)
+    .map_err(|e| anyhow::anyhow!("Invalid protocol authority: {}", e))?;
+ 
     // Derive the SentinelState PDA
     // seeds = [b"sentinel", protocol_address]
-    let (sentinel_state_pda, _bump) = Pubkey::find_program_address(
-        &[b"sentinel", protocol_pubkey.as_ref()],
-        &program_id,
-    );
+   let (sentinel_state_pda, _bump) = Pubkey::find_program_address(
+    &[b"sentinel", protocol_authority.as_ref()],  // ← now correct
+    &program_id,
+);
 
     // Derive the AlertRecord PDA
     // seeds = [b"alert", alert_id]
@@ -76,6 +76,7 @@ pub async fn submit_pause(
     let mut data = discriminator.to_vec();
     data.extend_from_slice(&alert.alert_id);           // alert_id: [u8; 32]
     data.push(alert.severity);                         // severity: u8
+   data.push(alert.rule_triggered as u8); 
     // estimated_at_risk: u64 (convert USD to lamports equiv, 6 decimals)
     let at_risk_lamports = (alert.estimated_at_risk_usd * 1_000_000.0) as u64;
     data.extend_from_slice(&at_risk_lamports.to_le_bytes());

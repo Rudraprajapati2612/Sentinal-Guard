@@ -67,8 +67,6 @@ const AMM_PROGRAMS: &[&str] = &[
     "GKybPT5ZzV5NgkXy1Pa8Bnu14MS7euEtK8j9zWHzYJpx", // unknown AMM in your logs
 ];
 
-const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
 /// Minimum borrow amount to count as flash loan in Method 3.
 /// $50,000 USDC — raised from $500 to eliminate AMM swap false positives.
 /// Real flash loan exploits borrow millions, not thousands.
@@ -232,18 +230,11 @@ fn write_tvl_to_redis(parsed: &ParsedTransaction, cfg: &Config, redis: &mut Conn
         .cloned();
     let Some(protocol) = protocol else { return };
 
-    // For AMM pools, TVL = the largest single USDC balance seen in this tx.
-    // This is the vault account — it holds all of the pool's USDC reserves.
-    // Net delta is always ~0 for swaps (in = out), so we track absolute balance.
-    let vault_balance_usd = parsed
-        .token_deltas
-        .iter()
-        .filter(|d| d.mint == USDC_MINT && d.after > 0)
-        .map(|d| d.after as f64 / 1_000_000.0)
-        .fold(0f64, f64::max); // largest single USDC account = the vault
+    // Mint-agnostic TVL proxy: the vault is the largest positive token balance
+    // touched by the transaction. This works with mock mints in local tests.
+    let vault_balance_usd = largest_token_balance_usd_from_tx(parsed);
 
-    // Skip if no meaningful USDC in this tx at all
-    if vault_balance_usd < 1_000.0 {
+    if vault_balance_usd < 100.0 {
         return;
     }
 
@@ -266,14 +257,9 @@ fn write_tvl_to_redis(parsed: &ParsedTransaction, cfg: &Config, redis: &mut Conn
             Err(_) => 0.0,
         };
 
-        // Always write — vault balance IS the current TVL, not a delta
-        // Use max(prev, current) to avoid TVL oscillating due to different
-        // vault accounts being seen in different txs
-        let tvl_to_write = vault_balance_usd.max(prev_tvl * 0.5); // allow drops up to 50%
-
         let cache = TvlCache {
             protocol: protocol.clone(),
-            tvl_usd: tvl_to_write,
+            tvl_usd: vault_balance_usd.max(prev_tvl * 0.5),
             slot,
             updated_at: timestamp,
         };
@@ -575,17 +561,27 @@ fn parse_token_deltas(
 
 // ─── TVL Helpers ─────────────────────────────────────────────────────────────
 
-/// Compute net signed USDC flow for a transaction.
+/// Compute the largest positive token-account balance touched by this tx.
+/// Used as a mint-agnostic TVL proxy when Redis is cold or tests use mock mints.
+pub fn largest_token_balance_usd_from_tx(tx: &ParsedTransaction) -> f64 {
+    tx.token_deltas
+        .iter()
+        .filter(|d| d.after > 0)
+        .map(|d| d.after as f64 / 1_000_000.0)
+        .fold(0f64, f64::max)
+}
+
+/// Compute net signed flow for the configured tracked mint.
 ///
 /// FIX from previous version: old code returned the single largest delta
 /// using .max_by(). This was wrong — if a tx has -$500k and +$300k USDC
 /// deltas, the correct net is -$200k, not -$500k.
 ///
 /// New: sum ALL signed USDC deltas. This gives the true net USDC movement.
-pub fn net_usdc_delta_from_tx(tx: &ParsedTransaction) -> f64 {
+pub fn net_usdc_delta_from_tx(tx: &ParsedTransaction, tracked_mint: &str) -> f64 {
     tx.token_deltas
         .iter()
-        .filter(|d| d.mint == USDC_MINT)
+        .filter(|d| d.mint == tracked_mint)
         .map(|d| d.delta as f64 / 1_000_000.0)
         .sum() // ← sum, not max_by
 }
@@ -670,12 +666,12 @@ fn subscriber_rpc_url(cfg: &Config) -> String {
 }
 
 fn websocket_url(cfg: &Config) -> String {
-    if looks_like_helius_host(&cfg.geyser_endpoint) {
-        return ensure_api_key_query(ws_url(&cfg.geyser_endpoint), &cfg.helius_api_key);
+    // ALWAYS use GEYSER_ENDPOINT if provided
+    if !cfg.geyser_endpoint.is_empty() {
+        return ws_url(&cfg.geyser_endpoint);
     }
-    if looks_like_helius_host(&cfg.solana_rpc_url) {
-        return ensure_api_key_query(ws_url(&cfg.solana_rpc_url), &cfg.helius_api_key);
-    }
+
+    // fallback only if missing
     ws_url(&cfg.solana_rpc_url)
 }
 

@@ -204,12 +204,12 @@ impl SlotSnapshot {
 pub type ProtocolWindow = VecDeque<SlotSnapshot>;
 
 // ─── Alert Types ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[repr(u8)]
+#[derive(Debug, Clone,Copy, Serialize, Deserialize, PartialEq)]
 pub enum RuleType {
-    FlashLoanDrain,
-    TvlVelocity,
-    BridgeOutflowSpike,
+    FlashLoanDrain = 1,
+    TvlVelocity = 2,
+    BridgeOutflowSpike = 3,
 }
 
 impl std::fmt::Display for RuleType {
@@ -232,6 +232,8 @@ pub struct AlertEvent {
     pub alert_id_hex: String,
     /// Protocol program ID that triggered the alert
     pub protocol: String,
+
+    pub protocol_authority: String,
     /// Severity score 0–100
     pub severity: u8,
     /// Which rule fired (highest-scoring if multiple)
