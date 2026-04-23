@@ -52,7 +52,7 @@ pub async fn submit_pause(
     let program_id = Pubkey::from_str(&cfg.sentinel_program_id)
         .map_err(|e| anyhow::anyhow!("Invalid program ID: {}", e))?;
 
-let protocol_authority = Pubkey::from_str(&alert.protocol_authority)
+let protocol_authority = Pubkey::from_str(&alert.protocol_authority.trim())
     .map_err(|e| anyhow::anyhow!("Invalid protocol authority: {}", e))?;
  
     // Derive the SentinelState PDA

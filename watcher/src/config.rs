@@ -18,6 +18,8 @@ pub struct Config{
     pub watched_programs: Vec<String>,
     /// Mint used for mint-specific flow calculations
     pub tracked_mint: String,
+    
+    pub vault_accounts : Vec<String>,
 
     pub protocol_authority: String,
     // ── Redis ─────────────────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ pub struct Config{
     pub database_url: String,
     /// Max DB connections in pool
     pub db_pool_size: u32,
+
  
     // ── API server ────────────────────────────────────────────────────────────
     pub api_port: u16,
@@ -85,8 +88,16 @@ pub fn load() -> Result<Config> {
         tracked_mint: std::env::var("TRACKED_MINT")
             .unwrap_or_else(|_| "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string()),
         
-            protocol_authority: std::env::var("PROTOCOL_AUTHORITY")
-    .unwrap_or_default(),
+           protocol_authority: std::env::var("PROTOCOL_AUTHORITY")
+    .expect("PROTOCOL_AUTHORITY must be set"),
+
+        vault_accounts : std::env::var("VAULT_ACCOUNTS")
+         .unwrap_or_default()
+         .split(',')
+         .map(|s| s.trim().to_string())
+         .filter(|a| !a.is_empty())
+         .collect(),
+
         // ── Redis ─────────────────────────────────────────────────────────────
         redis_url: std::env::var("REDIS_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
@@ -133,7 +144,7 @@ pub fn load() -> Result<Config> {
             .unwrap_or(10.0),
  
         min_severity_to_pause: std::env::var("MIN_SEVERITY_TO_PAUSE")
-            .unwrap_or_else(|_| "75".to_string())
+            .unwrap_or_else(|_| "60".to_string())
             .parse()
             .unwrap_or(75),
  

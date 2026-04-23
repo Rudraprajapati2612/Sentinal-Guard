@@ -42,3 +42,7 @@ build/
 # Logs
 # ----------------------
 *.log
+
+# Rust build (custom cargo target dir)
+.cargo-target/
+**/.cargo-target/

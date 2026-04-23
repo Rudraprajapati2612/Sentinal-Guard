@@ -72,16 +72,16 @@ pub async fn insert_alert(
     let trigger_signatures = serde_json::to_value(&alert.trigger_tx_signatures)?;
     let rule_triggered = alert.rule_triggered.to_string();
 
-    sqlx::query(
-        r#"
-        INSERT INTO alerts (
-            id, alert_id_hex, protocol, severity, rule_triggered,
-            estimated_at_risk_usd, trigger_signatures, slot, watcher_pubkey
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        ON CONFLICT (alert_id_hex) DO NOTHING
-        "#,
+   sqlx::query(
+    r#"
+    INSERT INTO alerts (
+        id, alert_id_hex, protocol, severity, rule_triggered,
+        estimated_at_risk_usd, trigger_signatures, slot, watcher_pubkey
     )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    ON CONFLICT DO NOTHING
+    "#,
+)
     .bind(id)
     .bind(&alert.alert_id_hex)
     .bind(&alert.protocol)

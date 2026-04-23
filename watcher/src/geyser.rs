@@ -39,7 +39,10 @@ use crate::types::{CpiMetrics, FlashLoanEvidence, ParsedTransaction, TokenDelta,
 const FLASH_LOAN_PROGRAMS: &[(&str, &str)] = &[
     ("So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo", "Solend"),
     ("MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD", "Marginfi"),
-    ("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", "Orca Whirlpool"),
+    (
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "Orca Whirlpool",
+    ),
 ];
 
 /// Jupiter is NOT a flash loan program — it's a DEX aggregator.
@@ -61,7 +64,7 @@ const AMM_PROGRAMS: &[&str] = &[
     "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CAMM
     "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  // Orca Whirlpool
     "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP", // Orca v1
-    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter aggregator
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  // Jupiter aggregator
     "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",  // Jupiter route
     "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",  // Pump.fun AMM
     "GKybPT5ZzV5NgkXy1Pa8Bnu14MS7euEtK8j9zWHzYJpx", // unknown AMM in your logs
@@ -118,7 +121,8 @@ pub async fn run(
                 Ok(parts) => parts,
                 Err(e) => {
                     let _ = event_tx.send(SubscriberEvent::Error(anyhow::anyhow!(
-                        "WebSocket subscribe failed: {}", e
+                        "WebSocket subscribe failed: {}",
+                        e
                     )));
                     return;
                 }
@@ -232,7 +236,15 @@ fn write_tvl_to_redis(parsed: &ParsedTransaction, cfg: &Config, redis: &mut Conn
 
     // Mint-agnostic TVL proxy: the vault is the largest positive token balance
     // touched by the transaction. This works with mock mints in local tests.
-    let vault_balance_usd = largest_token_balance_usd_from_tx(parsed);
+    let vault_balance_usd = if !cfg.vault_accounts.is_empty() {
+     parsed.token_deltas
+            .iter()
+            .filter(|d| cfg.vault_accounts.contains(&d.account) && d.after > 0)
+            .map(|d| d.after as f64/ 1_000_000.0)
+            .fold(0f64, f64::max)
+    }else {
+        largest_token_balance_usd_from_tx(parsed)
+    };
 
     if vault_balance_usd < 100.0 {
         return;
@@ -276,8 +288,7 @@ fn write_tvl_to_redis(parsed: &ParsedTransaction, cfg: &Config, redis: &mut Conn
             tracing::error!("Redis TVL write failed: {}", e);
         }
     });
-} 
-
+}
 
 // ─── Transaction Parser ───────────────────────────────────────────────────────
 
@@ -318,7 +329,10 @@ fn parse_rpc_transaction(
     tx: EncodedConfirmedTransactionWithStatusMeta,
     logs: &RpcLogsResponse,
 ) -> Result<ParsedTransaction> {
-    let meta = tx.transaction.meta.as_ref()
+    let meta = tx
+        .transaction
+        .meta
+        .as_ref()
         .context("Missing transaction meta")?;
 
     let ui_tx = match &tx.transaction.transaction {
@@ -340,7 +354,9 @@ fn parse_rpc_transaction(
     // Pass program_ids to flash loan detector so it can exclude AMM txs
     let flash_evidence = detect_flash_loan(&program_ids, &log_messages, &token_deltas);
 
-    let signature = ui_tx.signatures.first()
+    let signature = ui_tx
+        .signatures
+        .first()
         .cloned()
         .unwrap_or_else(|| logs.signature.clone());
 
@@ -353,7 +369,9 @@ fn parse_rpc_transaction(
         log_messages,
         flash_evidence,
         fee_payer,
-        timestamp: tx.block_time.unwrap_or_else(|| chrono::Utc::now().timestamp()),
+        timestamp: tx
+            .block_time
+            .unwrap_or_else(|| chrono::Utc::now().timestamp()),
     })
 }
 
@@ -502,7 +520,11 @@ fn compute_cpi_metrics(inner_instructions: &[UiInnerInstructions]) -> CpiMetrics
         max_depth = max_width;
     }
 
-    CpiMetrics { max_depth, max_width, total_cpi_count }
+    CpiMetrics {
+        max_depth,
+        max_width,
+        total_cpi_count,
+    }
 }
 
 fn ui_instruction_stack_height(ix: &UiInstruction) -> Option<u32> {
@@ -515,10 +537,7 @@ fn ui_instruction_stack_height(ix: &UiInstruction) -> Option<u32> {
 
 // ─── Token Delta Parser ───────────────────────────────────────────────────────
 
-fn parse_token_deltas(
-    meta: &UiTransactionStatusMeta,
-    account_keys: &[String],
-) -> Vec<TokenDelta> {
+fn parse_token_deltas(meta: &UiTransactionStatusMeta, account_keys: &[String]) -> Vec<TokenDelta> {
     let empty = Vec::new();
     let pre_balances = match meta.pre_token_balances.as_ref() {
         OptionSerializer::Some(b) => b,
@@ -591,7 +610,11 @@ pub fn net_usdc_delta_from_tx(tx: &ParsedTransaction, tracked_mint: &str) -> f64
 fn extract_account_keys(message: &UiMessage) -> Vec<String> {
     match message {
         UiMessage::Raw(raw) => raw.account_keys.clone(),
-        UiMessage::Parsed(parsed) => parsed.account_keys.iter().map(|k| k.pubkey.clone()).collect(),
+        UiMessage::Parsed(parsed) => parsed
+            .account_keys
+            .iter()
+            .map(|k| k.pubkey.clone())
+            .collect(),
     }
 }
 
@@ -635,7 +658,9 @@ fn ui_instruction_program_id(ix: &UiInstruction, account_keys: &[String]) -> Opt
     match ix {
         UiInstruction::Compiled(ix) => account_keys.get(ix.program_id_index as usize).cloned(),
         UiInstruction::Parsed(UiParsedInstruction::Parsed(ix)) => Some(ix.program_id.clone()),
-        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => Some(ix.program_id.clone()),
+        UiInstruction::Parsed(UiParsedInstruction::PartiallyDecoded(ix)) => {
+            Some(ix.program_id.clone())
+        }
     }
 }
 
@@ -680,21 +705,34 @@ fn looks_like_helius_host(url: &str) -> bool {
 }
 
 fn http_url(url: &str) -> String {
-    if url.starts_with("wss://") { url.replacen("wss://", "https://", 1) }
-    else if url.starts_with("ws://") { url.replacen("ws://", "http://", 1) }
-    else { url.to_string() }
+    if url.starts_with("wss://") {
+        url.replacen("wss://", "https://", 1)
+    } else if url.starts_with("ws://") {
+        url.replacen("ws://", "http://", 1)
+    } else {
+        url.to_string()
+    }
 }
 
 fn ws_url(url: &str) -> String {
-    if url.starts_with("https://") { url.replacen("https://", "wss://", 1) }
-    else if url.starts_with("http://") { url.replacen("http://", "ws://", 1) }
-    else { url.to_string() }
+    if url.starts_with("https://") {
+        url.replacen("https://", "wss://", 1)
+    } else if url.starts_with("http://") {
+        url.replacen("http://", "ws://", 1)
+    } else {
+        url.to_string()
+    }
 }
 
 fn ensure_api_key_query(url: String, api_key: &str) -> String {
-    if api_key.is_empty() || url.contains("api-key=") { return url; }
-    if url.contains('?') { format!("{}&api-key={}", url, api_key) }
-    else { format!("{}?api-key={}", url, api_key) }
+    if api_key.is_empty() || url.contains("api-key=") {
+        return url;
+    }
+    if url.contains('?') {
+        format!("{}&api-key={}", url, api_key)
+    } else {
+        format!("{}?api-key={}", url, api_key)
+    }
 }
 
 fn retry_jitter_ms() -> u64 {

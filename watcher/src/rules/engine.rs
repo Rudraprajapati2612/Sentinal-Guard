@@ -349,7 +349,7 @@ fn build_alert(
     // Deterministic: same tx + slot always produces same ID.
     // Used as PDA seed on-chain for the pause instruction.
     let mut hasher = Sha256::new();
-    hasher.update(tx.signature.as_bytes());
+    hasher.update(protocol.as_bytes());
     hasher.update(tx.slot.to_le_bytes());
     let hash = hasher.finalize();
 
