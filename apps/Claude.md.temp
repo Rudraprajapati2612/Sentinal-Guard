@@ -1,0 +1,1096 @@
+# CLAUDE.md — SentinelGuard Frontend Build Instructions
+
+> You are a senior frontend engineer building a production-ready Next.js 14 application
+> for SentinelGuard — a real-time on-chain security and exploit response layer for
+> Solana DeFi protocols. Read this entire file before writing a single line of code.
+
+---
+
+## 0. Project Context (Read First)
+
+SentinelGuard watches Solana DeFi protocols in real time. When an exploit is detected
+(flash loan drain, TVL velocity drop, bridge outflow spike), it autonomously submits a
+`pause_withdrawals` instruction to an Anchor smart contract on-chain — freezing the
+protocol before funds are fully drained. The entire detect-to-pause loop runs in ~2–3
+seconds on localnet and sub-500ms on mainnet with Yellowstone gRPC.
+
+**Live system facts (use these everywhere, never use placeholder data):**
+- Watcher pubkey: `EbVbJDyHdwoFZLxK7Ak8M4ta7hvJQthmBaGehd2VYa7m`
+- SentinelState PDA: `2oQ8Z6ua6jCyXxEzGMz4gaENSauY75EY46XUbvyzmt8q`
+- Vault address: `92mgS7mhu6hmJztUgJWef2gxu4zP3Pezm26MtNRQg1q9`
+- Mock Protocol Program: `3Eue3cN8zMkeCHLiy6KNNSi6AjKdDfJTBsME4md3xcaC`
+- Sentinel Program: `2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs`
+- Detection rules: FLASH_LOAN_DRAIN (R1), TVL_VELOCITY (R2), BRIDGE_OUTFLOW_SPIKE (R3)
+- Severity scale: 0–100. CRITICAL ≥90, HIGH 75–89, MEDIUM 60–74
+- Confirmed pause signatures from live runs:
+  - `3sX4PLsGqo9rhVCZ1vRWRoK9kx7VNkkYfrDmrDnjgNHHawpeK7MqccZxVJesYp8N9XDUyeNYxvoZuCU5rYyet3F8`
+  - `28wPiUdajetVddnuKq7NHqMVfgRcrYxKccq1E1vAjRuwCsH2LRQDbBRvTi9sz5XuFtPZm7Vk1SYUDARFMAHZMsou`
+
+---
+
+## 1. Tech Stack
+
+```
+Framework:     Next.js 14 (App Router, TypeScript)
+Styling:       Tailwind CSS + custom CSS variables
+Charts:        Recharts
+Components:    shadcn/ui (only where needed — avoid over-using it)
+Solana:        @solana/web3.js
+DB client:     postgres.js (not prisma — keep it lean)
+Fonts:         Google Fonts — use distinctive pairing, NOT Inter/Roboto/Arial
+Icons:         lucide-react
+Animations:    Framer Motion for page transitions, CSS for micro-interactions
+```
+
+---
+
+## 2. Design System
+
+### 2.1 Theme — LIGHT ONLY, NO DARK MODE
+
+This is a security monitoring tool used by protocol teams during incidents.
+Light theme only. Think Bloomberg Terminal meets Linear — clean, precise,
+information-dense without being cluttered.
+
+```css
+:root {
+  /* Backgrounds */
+  --bg-base:        #f8f7f4;   /* warm off-white, not pure white */
+  --bg-surface:     #ffffff;   /* cards, panels */
+  --bg-subtle:      #f1f0ed;   /* secondary panels, table rows alt */
+  --bg-inset:       #e8e7e3;   /* code blocks, badges */
+
+  /* Borders */
+  --border-default: #e2e0db;
+  --border-strong:  #c9c6bf;
+
+  /* Text */
+  --text-primary:   #1a1916;   /* near-black, warm */
+  --text-secondary: #6b6860;   /* muted */
+  --text-tertiary:  #9c9891;   /* very muted, timestamps */
+
+  /* Brand */
+  --brand-primary:  #0d7c4d;   /* deep forest green — security/trust */
+  --brand-light:    #e8f5ee;   /* green tint backgrounds */
+  --brand-border:   #a8d5bc;   /* green borders */
+
+  /* Semantic — Alerts */
+  --severity-critical-bg:     #fff1f0;
+  --severity-critical-border: #fca5a5;
+  --severity-critical-text:   #b91c1c;
+  --severity-critical-dot:    #ef4444;
+
+  --severity-high-bg:         #fff7ed;
+  --severity-high-border:     #fed7aa;
+  --severity-high-text:       #c2410c;
+  --severity-high-dot:        #f97316;
+
+  --severity-medium-bg:       #fefce8;
+  --severity-medium-border:   #fde68a;
+  --severity-medium-text:     #92400e;
+  --severity-medium-dot:      #eab308;
+
+  --severity-safe-bg:         #f0fdf4;
+  --severity-safe-border:     #86efac;
+  --severity-safe-text:       #15803d;
+  --severity-safe-dot:        #22c55e;
+
+  /* Status */
+  --status-paused:    #ef4444;
+  --status-active:    #22c55e;
+  --status-watching:  #0d7c4d;
+
+  /* Shadows */
+  --shadow-sm:  0 1px 2px rgba(26,25,22,0.06);
+  --shadow-md:  0 4px 12px rgba(26,25,22,0.08);
+  --shadow-lg:  0 8px 32px rgba(26,25,22,0.10);
+}
+```
+
+### 2.2 Typography
+
+```css
+/* Display font: DM Serif Display — authoritative, editorial */
+/* Body font: DM Sans — clean, geometric, modern */
+/* Mono font: JetBrains Mono — for addresses, hashes, code */
+
+--font-display: 'DM Serif Display', Georgia, serif;
+--font-body:    'DM Sans', system-ui, sans-serif;
+--font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+```
+
+Import in layout.tsx:
+```html
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+```
+
+### 2.3 Layout Principles
+
+- Max content width: 1280px, centered
+- Sidebar: 240px fixed left, white background, subtle right border
+- Main content: fluid, padding 32px
+- Cards: white bg, 1px border, 8px radius, shadow-sm
+- Section spacing: 48px between major sections
+- NO full-bleed dark sections on landing page
+- Use generous whitespace — security tools need breathing room
+
+---
+
+## 3. File Structure
+
+```
+src/
+  app/
+    layout.tsx                    # fonts, metadata, global styles
+    page.tsx                      # landing page (public, no auth)
+    dashboard/
+      layout.tsx                  # sidebar + topbar shell
+      page.tsx                    # main dashboard
+    alerts/
+      page.tsx                    # full alert history
+    analytics/
+      page.tsx                    # charts and stats
+    controls/
+      page.tsx                    # unpause, configure
+    api/
+      alerts/route.ts             # GET alerts from PostgreSQL
+      tvl/route.ts                # GET tvl_snapshots
+      protocol-status/route.ts    # GET SentinelState from Solana RPC
+      dispatch/route.ts           # POST webhook receiver from Rust watcher
+      unpause/route.ts            # POST unpause_withdrawals instruction
+
+  components/
+    landing/
+      Hero.tsx
+      HowItWorks.tsx
+      LiveDemo.tsx
+      Architecture.tsx
+      Stats.tsx
+      RuleExplainer.tsx
+      Footer.tsx
+    dashboard/
+      Sidebar.tsx
+      Topbar.tsx
+      StatsRow.tsx
+      TVLChart.tsx
+      AlertFeed.tsx
+      ProtocolPanel.tsx
+      AlertTable.tsx
+      AlertModal.tsx
+    shared/
+      AddressBadge.tsx            # truncate + copy to clipboard
+      SeverityBadge.tsx           # CRITICAL/HIGH/MEDIUM/LOW badge
+      SeverityBar.tsx             # 0-100 progress bar colored
+      RuleBadge.tsx               # FLASH_LOAN_DRAIN etc.
+      StatusIndicator.tsx         # PAUSED / ACTIVE / WATCHING dot
+      ExplorerLink.tsx            # Solana Explorer with cluster param
+      LoadingSkeleton.tsx
+
+  lib/
+    db.ts                         # postgres.js client
+    solana.ts                     # RPC client + SentinelState deserializer
+    types.ts                      # all shared TypeScript types
+    utils.ts                      # formatUSD, timeAgo, truncateAddress, etc.
+    constants.ts                  # program IDs, PDA addresses
+```
+
+---
+
+## 4. Environment Variables
+
+```bash
+# .env.local
+DATABASE_URL=postgres://sentinel_user:sentinel_pass@localhost:5432/sentinel
+SOLANA_RPC_URL=http://127.0.0.1:8899
+SENTINEL_PROGRAM_ID=2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs
+SENTINEL_STATE_PDA=2oQ8Z6ua6jCyXxEzGMz4gaENSauY75EY46XUbvyzmt8q
+PROTOCOL_AUTHORITY_KEYPAIR_PATH=../../mock-protocol/keys/protocol-authority.json
+MOCK_PROTOCOL_ID=3Eue3cN8zMkeCHLiy6KNNSi6AjKdDfJTBsME4md3xcaC
+VAULT_ADDRESS=92mgS7mhu6hmJztUgJWef2gxu4zP3Pezm26MtNRQg1q9
+WATCHER_PUBKEY=EbVbJDyHdwoFZLxK7Ak8M4ta7hvJQthmBaGehd2VYa7m
+NEXT_PUBLIC_SOLANA_EXPLORER_CLUSTER=custom
+NEXT_PUBLIC_SOLANA_EXPLORER_CUSTOM_URL=http://127.0.0.1:8899
+```
+
+For devnet/mainnet, change:
+```bash
+SOLANA_RPC_URL=https://api.devnet.solana.com
+NEXT_PUBLIC_SOLANA_EXPLORER_CLUSTER=devnet
+```
+
+---
+
+## 5. Landing Page (/) — Detailed Spec
+
+The landing page is the first thing judges see. It must communicate the project
+in under 10 seconds of reading. Use real data, real tx signatures, real numbers.
+
+### 5.1 Navbar
+```
+Left:  Shield icon + "SentinelGuard" in DM Serif Display
+Right: "Documentation" | "GitHub" | "Launch Dashboard →" (green button)
+Style: white bg, 1px bottom border, sticky, height 64px
+```
+
+### 5.2 Hero Section
+
+Layout: Two columns, 55/45 split.
+
+**Left column (text):**
+```
+Eyebrow (small caps, brand green):
+  REAL-TIME SOLANA SECURITY
+
+H1 (DM Serif Display, 56px, warm black, 2 lines max):
+  "Detect exploits.
+   Pause protocols.
+   Save funds."
+
+Body (DM Sans, 18px, secondary text, max 3 lines):
+  SentinelGuard watches every Solana transaction in real time.
+  When a flash loan drain or TVL attack is detected, it autonomously
+  submits a pause instruction on-chain — in under 3 seconds.
+
+CTA buttons (row):
+  [Launch Dashboard →]  (filled, brand green)
+  [View on GitHub]      (outlined)
+
+Social proof row below CTAs:
+  ✓ 5 attack scenarios tested    ✓ 2 rule types confirmed    ✓ Sub-3s response
+```
+
+**Right column (visual):**
+Build an animated "live alert card" that cycles through real alerts.
+This is NOT an image — it's actual JSX that simulates the live feed.
+
+```tsx
+// Animate between these two real alerts every 4 seconds:
+const alerts = [
+  {
+    type: "TVL_VELOCITY",
+    severity: 99,
+    label: "CRITICAL",
+    title: "TVL Velocity Drop Detected",
+    protocol: "3Eue3cN8...xcaC",
+    slot: 930,
+    atRisk: "$200,000 USDC",
+    pauseTx: "3sX4PLsG...et3F8",
+    time: "Paused in 2.1s",
+    status: "PAUSED"
+  },
+  {
+    type: "FLASH_LOAN_DRAIN",
+    severity: 64,
+    label: "MEDIUM",
+    title: "Flash Loan + Drain Detected",
+    protocol: "3Eue3cN8...xcaC",
+    slot: 1053,
+    atRisk: "$517,800 USDC",
+    pauseTx: "28wPiUda...Msou",
+    time: "Paused in 3.4s",
+    status: "PAUSED"
+  }
+]
+```
+
+Card design: white bg, left colored border (red for CRITICAL, yellow for MEDIUM),
+rounded-lg, shadow-md, monospace font for addresses, subtle pulse animation on
+the status dot.
+
+### 5.3 Stats Bar (full width, bg-subtle, 80px tall)
+
+```
+4 stats in a row, separated by vertical lines:
+
+| 2 Rules Active | < 3s Response | 5 Scenarios Tested | 100% Pause Rate |
+```
+
+### 5.4 "How It Works" Section
+
+Title: "From exploit to pause — autonomously" (DM Serif Display)
+Subtitle: "No human in the loop. No delay. No mercy for attackers."
+
+Layout: Alternating left/right — content left, visual right, then flip.
+
+**Step 1 — Watch**
+Left: heading + explanation text
+Right: a clean diagram showing:
+```
+Solana Validator
+      ↓ (Geyser WebSocket)
+SentinelGuard Watcher
+  geyser.rs parsing transactions
+```
+Explanation text:
+"A Rust Geyser subscriber connects to the Solana WebSocket and receives
+every transaction touching the monitored protocol in real time. Each transaction
+is parsed for token deltas, CPI depth, flash loan keywords, and program IDs."
+
+**Step 2 — Detect**
+Right: heading + explanation
+Left: show the 3 rules as cards
+
+Rule cards (3 cards in a column):
+```
+┌─────────────────────────────────────┐
+│ R1  Flash Loan + Drain              │
+│ Detects flash borrow followed by    │
+│ TVL drop within the same slot window│
+│ Confidence-weighted scoring         │
+│ Threshold: severity ≥ 60            │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ R2  TVL Velocity                    │
+│ Detects rapid TVL drop > 20% within │
+│ a 10-slot rolling window            │
+│ Scores up to severity 99            │
+│ Fires on: Scenario 2 (81% drain)    │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ R3  Bridge Outflow Spike            │
+│ Detects funds leaving Solana via    │
+│ known bridge programs               │
+│ Multiplier-based threshold          │
+└─────────────────────────────────────┘
+```
+
+**Step 3 — Pause**
+Left: heading + explanation
+Right: show the on-chain instruction flow
+
+```
+AlertEvent emitted
+      ↓
+pause_withdrawals ix built
+      ↓ (skipPreflight for speed)
+Solana RPC → anchor program
+      ↓
+sentinel_state.paused = true
+      ↓ (background)
+Kafka → Discord → DB
+```
+
+Explanation:
+"When severity crosses the threshold, the responder builds a
+pause_withdrawals instruction with the alert ID as PDA seed and submits it
+to the sentinel_guardian Anchor program. The protocol is paused on-chain.
+Kafka, Discord, and PostgreSQL are notified simultaneously."
+
+### 5.5 Architecture Diagram Section
+
+Title: "Built for speed. Designed for DeFi." (centered)
+
+Show a clean architecture diagram built in pure JSX/CSS (no images):
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    SOLANA BLOCKCHAIN                     │
+│  ┌─────────────────┐         ┌──────────────────────┐   │
+│  │  mock_protocol   │         │  sentinel_guardian   │   │
+│  │  (USDC Vault)    │────────▶│  (Anchor Program)    │   │
+│  │  3Eue3cN8...     │ watches │  2Fi9UPVbD...        │   │
+│  └─────────────────┘         └──────────────────────┘   │
+└───────────────────┬──────────────────────────────────────┘
+                    │ Geyser WebSocket
+                    ▼
+┌─────────────────────────────────────────────────────────┐
+│                 SENTINELGUARD WATCHER (Rust)             │
+│  geyser.rs → engine.rs → responder/                     │
+│              R1 R2 R3    pause.rs + webhooks.rs          │
+└────┬────────────────────────────┬────────────────────────┘
+     │                            │
+     ▼                            ▼
+┌─────────┐  ┌─────────┐  ┌─────────────┐  ┌──────────┐
+│ Postgres│  │  Redis  │  │    Kafka    │  │ Discord  │
+│ alerts  │  │ cooldown│  │sentinel.    │  │ webhook  │
+│ table   │  │ dedup   │  │alerts topic │  │ dispatch │
+└─────────┘  └─────────┘  └─────────────┘  └──────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────┐
+│              NEXT.JS DASHBOARD (this app)                │
+│  Landing → Dashboard → Alerts → Analytics → Controls    │
+└─────────────────────────────────────────────────────────┘
+```
+
+Render this as an actual styled div-based diagram, not ASCII. Use colored
+boxes with labels, connecting lines with SVG arrows, and the brand green
+color for active/live connections.
+
+### 5.6 "Proven in Testing" Section
+
+Title: "5 attack scenarios. All detected."
+
+Show a timeline/table of the 5 scenarios:
+
+```
+Scenario | Attack Type              | Expected     | Result      | On-chain Pause
+---------|--------------------------|--------------|-------------|---------------
+    1    | Normal deposits + 3.3%   | No alert     | ✅ Silent   | N/A
+         | withdrawal               |              |             |
+    2    | Rapid 81% drain in       | TVL_VELOCITY | ✅ Severity | Confirmed
+         | 3 transactions           | fires        | 99, <3s     | 3sX4PLsG...
+    3    | Flash loan + 40%         | FLASH_LOAN   | ✅ Severity | Confirmed
+         | drain exploit            | _DRAIN fires | 64, <5s     | 28wPiUda...
+    4    | 10% single drain         | No alert     | ✅ Silent   | N/A
+         | (below threshold)        |              |             |
+    5    | Slow 5%×8 cumulative     | TVL_VELOCITY | ✅ Fires at | Cooldown
+         | bleed                    | fires ~s5    | slice 5     | active
+```
+
+Style this as a clean table with green checkmarks, red borders on attack rows,
+and monospace font for the transaction signatures.
+
+### 5.7 Footer
+
+```
+Left:   SentinelGuard logo + "Built for the Colosseum Frontier Hackathon"
+Center: Links: Dashboard | GitHub | Documentation
+Right:  "Watcher: EbVbJD...VYa7m" (monospace, muted)
+        "Deployed on Solana Localnet / Devnet"
+```
+
+---
+
+## 6. Dashboard Layout
+
+The dashboard shell wraps all authenticated pages.
+
+### 6.1 Sidebar (240px, fixed left, white, border-right)
+
+```
+┌──────────────────────────┐
+│  🛡 SENTINEL_GUARD       │  ← DM Serif Display, 16px
+│     v1.0.0               │  ← muted, 11px
+├──────────────────────────┤
+│  ● Watcher Live          │  ← green pulsing dot + status
+│  EbVbJD...VYa7m          │  ← monospace, 11px, truncated
+├──────────────────────────┤
+│                          │
+│  Dashboard               │  ← active = green left border + bg-subtle
+│  Alert History           │
+│  Controls                │
+│  Integration Guide       │
+│                          │
+├──────────────────────────┤
+│  Protocol                │
+│  3Eue3cN8...xcaC         │  ← monospace, muted
+│  ● ACTIVE                │  ← live status from API
+│                          │
+│  SentinelState           │
+│  2oQ8Z6u...mt8q          │
+└──────────────────────────┘
+```
+
+### 6.2 Topbar (height 56px, white, border-bottom)
+
+```
+Left:  "Dashboard"  (page title, DM Serif Display)
+Right: [Last updated: 3s ago] [● Live] [Refresh]
+```
+
+---
+
+## 7. Dashboard Main Page (/dashboard)
+
+**IMPORTANT: Do NOT stack everything vertically. Use a two-column layout
+for the middle section. Give each panel breathing room.**
+
+### Layout structure:
+```
+[Topbar]
+[Stats Row — 4 cards, full width]
+[TVL Chart — full width]
+[Left 58% | Right 38%]
+  Alert Feed  | Protocol Status Panel
+[Alert History Table — full width]
+```
+
+### 7.1 Stats Row (4 cards)
+
+Card design: white bg, 1px border, 8px radius, 24px padding.
+Each card has: icon (top-left), value (large, DM Serif Display), label, subtitle.
+
+```
+┌────────────────────┐  ┌────────────────────┐
+│ 🛡 Protocols       │  │ ⚡ Alerts (24h)     │
+│   Monitored        │  │                    │
+│ ── ── ── ── ── ──  │  │ ── ── ── ── ── ──  │
+│       1            │  │       2            │
+│ MockProtocol active│  │ 1 TVL · 1 Flash    │
+└────────────────────┘  └────────────────────┘
+
+┌────────────────────┐  ┌────────────────────┐
+│ ⛓ Pauses          │  │ ⏱ Avg Response     │
+│   Executed         │  │   Time             │
+│ ── ── ── ── ── ──  │  │ ── ── ── ── ── ──  │
+│       2            │  │     ~2.3s          │
+│ Both confirmed     │  │ Detection to pause │
+└────────────────────┘  └────────────────────┘
+```
+
+Values come from GET /api/alerts. Show loading skeleton while fetching.
+
+### 7.2 TVL Chart (full width, height 280px)
+
+```tsx
+// Recharts LineChart
+// X axis: slot number (formatted as #1049 etc)
+// Y axis: TVL in USD ($1.2M format)
+// Line: brand green (#0d7c4d), strokeWidth 2
+// Show vertical red dashed lines at alert slots (930, 1053)
+// Show tooltip with slot, TVL, and alert label if applicable
+// Data from GET /api/tvl
+// Auto-refresh every 5 seconds
+// Show "No TVL data — start the watcher" if empty
+```
+
+Title above chart: "Protocol TVL — Real Time Monitor"
+Subtitle: "10-slot rolling window · Updates every 5s"
+
+### 7.3 Alert Feed (left column, 58%)
+
+Title: "Live Alert Feed"
+Subtitle: "Newest first · Auto-refreshing every 2s"
+
+Each alert card:
+```
+┌─[colored left border 4px]────────────────────────────────┐
+│  [Rule badge]  [Severity badge]              [time ago]  │
+│                                                          │
+│  "Flash Loan + Drain Detected"    ← title by rule type   │
+│  Protocol: 3Eue3cN8...xcaC                               │
+│  Slot: #1053  ·  At risk: $517,800 USDC                  │
+│                                                          │
+│  On-chain tx:                                            │
+│  [28wPiUda...Msou ↗]  ← ExplorerLink component          │
+│                                                          │
+│  [● PAUSED]                                              │
+└──────────────────────────────────────────────────────────┘
+```
+
+Border colors:
+- FLASH_LOAN_DRAIN → var(--severity-critical-border) red
+- TVL_VELOCITY → var(--severity-high-border) orange
+- BRIDGE_OUTFLOW_SPIKE → var(--severity-medium-border) yellow
+
+Animate new alerts sliding in from top with a subtle green flash on arrival.
+Show "Watching for threats..." with a pulsing dot if no alerts in last 60s.
+
+### 7.4 Protocol Status Panel (right column, 38%)
+
+This is a tall panel with multiple sections separated by dividers.
+
+```
+┌──────────────────────────────────┐
+│ Protocol Status                  │
+├──────────────────────────────────┤
+│                                  │
+│  MockProtocol (USDC Vault)       │  ← DM Serif Display
+│                                  │
+│  Status                          │
+│  [● ACTIVE] or [● PAUSED]        │  ← large, colored badge
+│                                  │
+├──────────────────────────────────┤
+│  Current TVL                     │
+│  $1,294,500                      │  ← large number, DM Serif
+│                                  │
+│  Pause Count                     │
+│  2                               │
+│                                  │
+│  Last Pause                      │
+│  3 minutes ago                   │
+├──────────────────────────────────┤
+│  Addresses                       │
+│                                  │
+│  Program ID                      │
+│  [3Eue3cN8...xcaC] [copy]        │
+│                                  │
+│  SentinelState PDA               │
+│  [2oQ8Z6u...mt8q]  [copy]        │
+│                                  │
+│  Vault                           │
+│  [92mgS7m...Gq9]   [copy]        │
+├──────────────────────────────────┤
+│  [Unpause Protocol]              │  ← only enabled if paused=true
+│  Calls POST /api/unpause         │
+└──────────────────────────────────┘
+```
+
+Status comes from GET /api/protocol-status which reads SentinelState
+account directly from Solana RPC. Refresh every 5 seconds.
+
+### 7.5 Alert History Table (full width)
+
+Columns:
+```
+Alert ID | Rule | Severity | At Risk | Slot | Time | On-chain Tx | Status
+```
+
+- Alert ID: first 8 chars, monospace, click to open modal
+- Rule: RuleBadge component
+- Severity: SeverityBar (0-100 visual) + number
+- At Risk: formatUSD
+- Slot: monospace #XXXX
+- Time: timeAgo
+- On-chain Tx: ExplorerLink or "—" if null
+- Status: green MONITORED or red PAUSED
+
+Pagination: 10 per page. Sort by created_at DESC default.
+Click any row → AlertModal opens.
+
+### 7.6 Alert Detail Modal
+
+Triggered by clicking any row in the table or alert card.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Alert Detail                                  [×]       │
+├──────────────────────────────────────────────────────────┤
+│  [Rule badge] [Severity badge]                           │
+│                                                          │
+│  "Flash Loan + Drain Detected on MockProtocol"           │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│  Alert ID (full hex):                                    │
+│  d4b87a61c0e2690ce44c74793e46a2547e81ab77281fd2f1...     │
+│  [copy]                                                  │
+│                                                          │
+│  What happened:                                          │
+│  Flash loan detected (confidence: 80%) at slot #1049     │
+│  followed by 42.8% TVL drop ($1,131,500 → $647,250)     │
+│  within a 5-slot window. Pause triggered at slot #1053.  │
+│                                                          │
+│  On-chain Pause Transaction:                             │
+│  [28wPiUdajetVddnuKq7NH...Msou ↗]                       │
+│                                                          │
+│  Trigger Transactions:                                   │
+│  [5ALCXWiZ...iZ ↗] [view on explorer]                   │
+│                                                          │
+│  Timeline:                                               │
+│  03:59:29  Flash borrow detected (slot 1049)             │
+│  03:59:31  TVL drop measured — 42.8% (slot 1053)         │
+│  03:59:31  Alert emitted — severity 64                   │
+│  03:59:31  Pause tx sent to Solana                       │
+│  03:59:44  Pause tx confirmed ✅                         │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. Alert History Page (/alerts)
+
+Full page table with filters at top.
+
+### Filters row:
+```
+[All Rules ▼]  [All Severities ▼]  [Date Range]  [Search: alert ID or tx sig]  [Export CSV]
+```
+
+Same table as dashboard but full page, 25 rows per page.
+
+Rule explanations sidebar (right 280px, collapsible):
+```
+Detection Rules Reference
+
+R1 · Flash Loan + Drain
+Fires when flash loan evidence (confidence > 50%)
+is found within the same 10-slot window as a TVL
+drop exceeding 20%. Score is weighted by confidence
+and slot distance between flash and drain.
+
+R2 · TVL Velocity
+Fires when TVL drops more than 20% within a 10-slot
+rolling window. Score scales linearly: 20%=60,
+50%=80, 80%=99. Immune to false positives from
+normal deposit/withdrawal cycles.
+
+R3 · Bridge Outflow Spike
+Fires when token outflows through known Solana bridge
+programs exceed a configurable multiplier of the
+30-slot average outflow baseline.
+```
+
+---
+
+## 9. Controls Page (/controls)
+
+Two-column layout. Left: actions. Right: current config.
+
+### Left — Actions
+
+**Unpause Protocol**
+```
+Card with:
+- Current status: [● PAUSED] or [● ACTIVE]
+- Pause count: 2
+- Last paused: time ago
+- [Unpause Protocol] button (disabled if already active)
+- Warning: "This will re-enable withdrawals. Ensure the exploit is resolved."
+```
+
+**Register New Protocol**
+```
+Card with form:
+- Protocol Authority Pubkey (input)
+- Watcher Pubkey (pre-filled: EbVbJDyH...)
+- Escrow Amount in SOL (input, optional)
+- [Register Protocol] button
+- Calls POST /api/register (build the instruction client-side)
+```
+
+### Right — Configuration Display
+
+```
+Current Config
+──────────────────────────────
+Sentinel Program
+2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs  [copy]
+
+SentinelState PDA
+2oQ8Z6ua6jCyXxEzGMz4gaENSauY75EY46XUbvyzmt8q  [copy]
+
+Watcher Pubkey
+EbVbJDyHdwoFZLxK7Ak8M4ta7hvJQthmBaGehd2VYa7m  [copy]
+
+Detection Window
+10 slots
+
+TVL Drop Threshold
+20%
+
+Min Severity to Pause
+60
+
+Alert Cooldown
+30 seconds
+
+Network
+Localnet (http://127.0.0.1:8899)
+```
+
+---
+
+## 10. API Routes — Implementation Detail
+
+### GET /api/alerts
+```ts
+// src/app/api/alerts/route.ts
+import { sql } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const limit = parseInt(searchParams.get('limit') ?? '50');
+  const offset = parseInt(searchParams.get('offset') ?? '0');
+  const rule = searchParams.get('rule_triggered');
+  const minSeverity = parseInt(searchParams.get('min_severity') ?? '0');
+
+  const alerts = await sql`
+    SELECT * FROM alerts
+    WHERE severity >= ${minSeverity}
+    ${rule ? sql`AND rule_triggered = ${rule}` : sql``}
+    ORDER BY created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+  
+  const [{ count }] = await sql`SELECT COUNT(*) FROM alerts`;
+  
+  return NextResponse.json({ alerts, total: parseInt(count) });
+}
+```
+
+### GET /api/protocol-status
+```ts
+// Deserialize SentinelState account from Solana RPC
+// SentinelState layout:
+//   [0..8]   discriminator (skip)
+//   [8..40]  protocol_address: Pubkey
+//   [40]     paused: bool
+//   [41..49] pause_count: u64 LE
+//   [49..57] last_pause_ts: i64 LE
+//   [57..65] escrow_balance: u64 LE
+//   [65..97] authority: Pubkey
+//   [97]     bump: u8
+
+import { Connection, PublicKey } from '@solana/web3.js';
+
+export async function GET() {
+  const conn = new Connection(process.env.SOLANA_RPC_URL!);
+  const pda = new PublicKey(process.env.SENTINEL_STATE_PDA!);
+  
+  const account = await conn.getAccountInfo(pda);
+  if (!account) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  
+  const data = account.data;
+  const protocol_address = new PublicKey(data.slice(8, 40)).toBase58();
+  const paused = data[40] === 1;
+  const pause_count = Number(data.readBigUInt64LE(41));
+  const last_pause_ts = Number(data.readBigInt64LE(49));
+  const escrow_balance = Number(data.readBigUInt64LE(57));
+  const authority = new PublicKey(data.slice(65, 97)).toBase58();
+  
+  return NextResponse.json({
+    protocol_address, paused, pause_count,
+    last_pause_ts, escrow_balance, authority
+  });
+}
+```
+
+### POST /api/dispatch (webhook receiver)
+```ts
+// Receives AlertEvent JSON from Rust watcher
+// Store in a simple in-memory ring buffer for real-time feed
+// Also works if DB insert is preferred
+
+const recentAlerts: any[] = []; // max 100
+
+export async function POST(req: Request) {
+  const alert = await req.json();
+  recentAlerts.unshift(alert);
+  if (recentAlerts.length > 100) recentAlerts.pop();
+  console.log('[Webhook] Alert received:', alert.alert_id_hex?.slice(0, 16));
+  return Response.json({ ok: true });
+}
+
+export async function GET() {
+  return Response.json({ alerts: recentAlerts });
+}
+```
+
+### POST /api/unpause
+```ts
+// Build and send unpause_withdrawals instruction
+// Anchor discriminator: sha256("global:unpause_withdrawals")[..8]
+// Accounts: sentinel_state (mut), protocol_authority (signer)
+
+import { createHash } from 'crypto';
+import {
+  Connection, Keypair, PublicKey,
+  Transaction, TransactionInstruction
+} from '@solana/web3.js';
+import * as fs from 'fs';
+
+export async function POST() {
+  const conn = new Connection(process.env.SOLANA_RPC_URL!);
+  const keypairPath = process.env.PROTOCOL_AUTHORITY_KEYPAIR_PATH!;
+  const keypair = Keypair.fromSecretKey(
+    new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, 'utf8')))
+  );
+  
+  const disc = createHash('sha256')
+    .update('global:unpause_withdrawals')
+    .digest()
+    .subarray(0, 8);
+    
+  const sentinelState = new PublicKey(process.env.SENTINEL_STATE_PDA!);
+  const programId = new PublicKey(process.env.SENTINEL_PROGRAM_ID!);
+  
+  const ix = new TransactionInstruction({
+    programId,
+    data: Buffer.from(disc),
+    keys: [
+      { pubkey: sentinelState, isSigner: false, isWritable: true },
+      { pubkey: keypair.publicKey, isSigner: true, isWritable: false },
+    ]
+  });
+  
+  const tx = new Transaction().add(ix);
+  tx.feePayer = keypair.publicKey;
+  tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+  tx.sign(keypair);
+  
+  const sig = await conn.sendRawTransaction(tx.serialize());
+  await conn.confirmTransaction(sig, 'confirmed');
+  
+  return Response.json({ ok: true, signature: sig });
+}
+```
+
+---
+
+## 11. Shared Components — Implementation Notes
+
+### AddressBadge.tsx
+```tsx
+// Props: address (string), chars (number = 8), showCopy (bool = true)
+// Display: first {chars} chars + "..." + last 4 chars
+// Click copy icon → copy full address to clipboard
+// Show "Copied!" tooltip for 1.5s
+// Font: font-mono, text-sm
+// Example: EbVbJDyH...VYa7m
+```
+
+### ExplorerLink.tsx
+```tsx
+// Props: signature (string), label (string), type ('tx' | 'address')
+// Builds URL: https://explorer.solana.com/{type}/{signature}?cluster={cluster}&customUrl={url}
+// cluster and customUrl from env vars
+// Opens in new tab
+// Shows signature truncated + external link icon
+```
+
+### SeverityBadge.tsx
+```tsx
+// Props: severity (number), label (string)
+// 90-100: CRITICAL, red bg/text
+//  75-89: HIGH, orange bg/text
+//  60-74: MEDIUM, yellow bg/text
+//   0-59: LOW, green bg/text
+// Display: colored dot + label + "(XX/99)"
+```
+
+### LoadingSkeleton.tsx
+```tsx
+// Animated pulse skeleton
+// Variants: card, row, chart
+// Use while API calls are in-flight
+// Never show blank white space — always skeleton
+```
+
+---
+
+## 12. Utility Functions (lib/utils.ts)
+
+```ts
+export const formatUSD = (n: number): string => {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toFixed(0)}`;
+};
+
+export const truncateAddress = (addr: string, chars = 8): string => {
+  if (!addr || addr.length < chars + 4) return addr;
+  return `${addr.slice(0, chars)}...${addr.slice(-4)}`;
+};
+
+export const timeAgo = (dateStr: string): string => {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+};
+
+export const getRuleTitle = (rule: string): string => ({
+  FLASH_LOAN_DRAIN: 'Flash Loan + Drain Detected',
+  TVL_VELOCITY: 'TVL Velocity Drop Detected',
+  BRIDGE_OUTFLOW_SPIKE: 'Bridge Outflow Spike Detected',
+}[rule] ?? rule);
+
+export const getRuleDescription = (rule: string, severity: number, detail?: string): string => {
+  if (rule === 'FLASH_LOAN_DRAIN') {
+    return `Flash loan detected (confidence: 80%) followed by TVL drop within 5-slot window. Severity: ${severity}/99.`;
+  }
+  if (rule === 'TVL_VELOCITY') {
+    return `TVL dropped rapidly within a 10-slot rolling window. Score scaled to ${severity}/99 based on drop magnitude.`;
+  }
+  return `Bridge outflow spike detected. Severity: ${severity}/99.`;
+};
+
+export const explorerUrl = (sig: string, type: 'tx' | 'address' = 'tx'): string => {
+  const cluster = process.env.NEXT_PUBLIC_SOLANA_EXPLORER_CLUSTER ?? 'custom';
+  const customUrl = process.env.NEXT_PUBLIC_SOLANA_EXPLORER_CUSTOM_URL ?? 'http://127.0.0.1:8899';
+  return `https://explorer.solana.com/${type}/${sig}?cluster=${cluster}&customUrl=${encodeURIComponent(customUrl)}`;
+};
+```
+
+---
+
+## 13. constants.ts
+
+```ts
+export const SENTINEL_PROGRAM_ID = '2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs';
+export const SENTINEL_STATE_PDA  = '2oQ8Z6ua6jCyXxEzGMz4gaENSauY75EY46XUbvyzmt8q';
+export const MOCK_PROTOCOL_ID    = '3Eue3cN8zMkeCHLiy6KNNSi6AjKdDfJTBsME4md3xcaC';
+export const VAULT_ADDRESS       = '92mgS7mhu6hmJztUgJWef2gxu4zP3Pezm26MtNRQg1q9';
+export const WATCHER_PUBKEY      = 'EbVbJDyHdwoFZLxK7Ak8M4ta7hvJQthmBaGehd2VYa7m';
+export const PROTOCOL_AUTHORITY  = 'Pujwm5egzn5q4PQhQ6fQrBAbkktJKo699MNrxN5pQAE';
+
+export const CONFIRMED_PAUSE_TXS = [
+  '3sX4PLsGqo9rhVCZ1vRWRoK9kx7VNkkYfrDmrDnjgNHHawpeK7MqccZxVJesYp8N9XDUyeNYxvoZuCU5rYyet3F8',
+  '28wPiUdajetVddnuKq7NHqMVfgRcrYxKccq1E1vAjRuwCsH2LRQDbBRvTi9sz5XuFtPZm7Vk1SYUDARFMAHZMsou',
+];
+
+export const RULE_LABELS: Record<string, string> = {
+  FLASH_LOAN_DRAIN:     'Flash Loan + Drain',
+  TVL_VELOCITY:         'TVL Velocity Drop',
+  BRIDGE_OUTFLOW_SPIKE: 'Bridge Outflow Spike',
+};
+
+export const SEVERITY_LEVELS = {
+  CRITICAL: { min: 90, max: 100, color: 'var(--severity-critical-text)', bg: 'var(--severity-critical-bg)' },
+  HIGH:     { min: 75, max: 89,  color: 'var(--severity-high-text)',     bg: 'var(--severity-high-bg)'     },
+  MEDIUM:   { min: 60, max: 74,  color: 'var(--severity-medium-text)',   bg: 'var(--severity-medium-bg)'   },
+  LOW:      { min:  0, max: 59,  color: 'var(--severity-safe-text)',     bg: 'var(--severity-safe-bg)'     },
+};
+
+export const getSeverityLevel = (s: number) => {
+  if (s >= 90) return 'CRITICAL';
+  if (s >= 75) return 'HIGH';
+  if (s >= 60) return 'MEDIUM';
+  return 'LOW';
+};
+```
+
+---
+
+## 14. Build & Run Instructions (for README)
+
+```bash
+# Install dependencies
+cd dashboard && bun install
+
+# Set up environment
+cp .env.example .env.local
+# Edit .env.local with your values
+
+# Start development server
+bun dev
+# → http://localhost:3000  (landing page)
+# → http://localhost:3000/dashboard
+
+# Build for production
+bun run build
+bun start
+```
+
+---
+
+## 15. Quality Checklist (before considering done)
+
+- [ ] Landing page communicates the project in under 10 seconds
+- [ ] All addresses are real (from constants.ts), never placeholder
+- [ ] All API routes handle errors gracefully (try/catch, proper status codes)
+- [ ] Loading skeletons shown while fetching, never blank white
+- [ ] AddressBadge copy works in all browsers
+- [ ] ExplorerLink opens correct Solana Explorer URL with cluster param
+- [ ] TVL chart renders even with empty data (show "Waiting for data...")
+- [ ] Alert feed shows "Watching for threats..." when no recent alerts
+- [ ] Unpause button disabled when protocol is already active
+- [ ] Mobile: sidebar collapses to hamburger at < 768px
+- [ ] No dark mode anywhere (light only, as specified)
+- [ ] Fonts loaded: DM Serif Display, DM Sans, JetBrains Mono
+- [ ] No Inter, Roboto, or system-ui as primary fonts
+- [ ] Page transitions feel smooth (Framer Motion layout animations)
+- [ ] Console has no errors in production build
+
+---
+
+## 16. What NOT to do
+
+- Do NOT use a dark theme anywhere
+- Do NOT use placeholder addresses like "0x1234..." — use real constants
+- Do NOT use Inter or Roboto as the primary font
+- Do NOT stack the entire dashboard into one vertical column
+- Do NOT show an empty white panel while loading — always skeleton
+- Do NOT use purple gradients (cliché AI aesthetic)
+- Do NOT hardcode TVL or alert counts — always fetch from API
+- Do NOT use `<img>` tags for the architecture diagram — build it in JSX
+- Do NOT add authentication — this is an internal tool
+- Do NOT use `any` types in TypeScript — define proper interfaces in types.ts
+```
