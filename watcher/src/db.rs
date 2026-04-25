@@ -214,3 +214,26 @@ pub async fn get_bridge_outflow_avg(
 
     Ok(avg.unwrap_or(0.0))
 }
+
+pub async fn get_tvl_history(
+    pool: &DbPool,
+    protocol: &str,
+    limit: i64,
+) -> Result<Vec<TvlSnapshotRow>> {
+    let rows = sqlx::query_as!(
+        TvlSnapshotRow,
+        r#"
+        SELECT id, protocol, tvl_usd, slot, captured_at
+        FROM tvl_snapshots
+        WHERE protocol = $1
+        ORDER BY captured_at DESC
+        LIMIT $2
+        "#,
+        protocol,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}

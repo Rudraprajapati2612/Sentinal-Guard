@@ -20,6 +20,7 @@
 // If this service is down, Kafka still has the alert. No data loss.
 
 import { Elysia, t } from "elysia";
+import {cors} from '@elysia/cors';
 import { sendDiscordAlert } from "./targets/discord.ts";
 import { requestCircleFreeze } from "./targets/circle.ts";
 import { requestWormholeHalt } from "./targets/wormhole.ts";
@@ -102,7 +103,7 @@ async function dispatchAlert(alert: AlertEvent): Promise<DispatchResult> {
 // ─── Elysia server ────────────────────────────────────────────────────────────
 
 const app = new Elysia()
-
+  .use(cors())
   // ── Health check ──────────────────────────────────────────────────────────
   .get("/health", () => ({
     status: "ok",
