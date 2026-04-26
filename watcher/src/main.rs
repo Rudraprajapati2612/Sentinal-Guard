@@ -28,6 +28,8 @@ mod geyser;
 mod responder;
 mod rules;
 mod types;
+mod parser;
+mod gyser_grpc;
 
 use anyhow::Result;
 use solana_sdk::signer::Signer;
