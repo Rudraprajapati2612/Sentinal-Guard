@@ -1,36 +1,7 @@
-// watcher/src/rules/flash_loan.rs
-//
-// Rule 1: Flash Loan + TVL Drain
-//
-// Detects the classic exploit pattern:
-//   1. Attacker takes a flash loan (borrow large amount, must repay in same tx)
-//   2. Uses borrowed funds to manipulate price or drain a protocol vault
-//   3. Repays the flash loan — but protocol has been drained
-//
-// The flash loan tx and drain tx are often SEPARATE transactions in the same
-// or adjacent slots. This rule uses a 5-slot window to correlate them.
-//
-// Scoring:
-//   Old: binary 90 if (has_flash_loan AND tvl_drop > 15%) else 0
-//   New: graduated score = base_score(tvl_drop) * flash_confidence / 100
-//
-// This means:
-//   - A Solend flash loan (confidence=95) + 50% TVL drop → score ~90
-//   - A log-keyword-only detection (confidence=70) + 16% TVL drop → score ~52
-//   - A delta-pattern-only detection (confidence=55) + 16% TVL drop → score ~41
-//
-// The engine only fires an alert if score >= cfg.min_severity_to_pause (default 70).
-// So low-confidence detections need a larger TVL drop to trigger.
 
 use crate::types::SlotSnapshot;
 
-/// Evaluate the flash loan drain rule against a rolling window of slot snapshots.
-/// Returns a severity score 0–95 (0 = no alert).
-///
-/// # Arguments
-/// * `window` — ordered slice of SlotSnapshots, oldest first, newest last.
-///              Typically 5 slots from the engine's VecDeque.
-/// * `peak_tvl` — persisted per-protocol peak TVL used as the pre-drain baseline.
+
 pub fn score(window: &[&SlotSnapshot], peak_tvl: f64) -> u8 {
     // Need at least 2 slots to compute a TVL drop
     if window.len() < 2 {
@@ -41,12 +12,7 @@ pub fn score(window: &[&SlotSnapshot], peak_tvl: f64) -> u8 {
     let recent_start = window.len().saturating_sub(5);
     let recent = &window[recent_start..];
 
-    // ── Step 1: Find the highest flash loan confidence in the window ──────────
-    //
-    // We look across ALL txs in ALL recent slots, not just the current slot.
-    // This is crucial: the flash loan borrow and the drain are often in different
-    // slots. The borrow tx ends with TVL unchanged (loan repaid atomically),
-    // the drain is a separate tx that follows.
+ 
     let max_confidence: u8 = recent
         .iter()
         .map(|snap| snap.max_flash_confidence())
@@ -58,10 +24,7 @@ pub fn score(window: &[&SlotSnapshot], peak_tvl: f64) -> u8 {
         return 0;
     }
 
-    // ── Step 2: Compute TVL drop across the window ────────────────────────────
-    //
-    // Use the persisted peak as baseline so a post-drain window does not
-    // forget the real pre-attack TVL.
+   
     let baseline_tvl = if peak_tvl > 10_000.0 {
         peak_tvl
     } else {

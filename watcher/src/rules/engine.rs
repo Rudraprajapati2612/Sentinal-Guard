@@ -1,14 +1,3 @@
-// watcher/src/rules/engine.rs
-//
-// Detection engine — reads ParsedTransactions from the broadcast channel,
-// maintains per-protocol rolling windows, and runs all three rules every slot.
-//
-// Changes from previous version:
-//   - Uses tx.flash_evidence.detected instead of tx.is_flash_loan
-//   - Uses tx.cpi.suspicion_score() as a supplemental signal
-//   - Rule 1 score now uses flash confidence weighting (see flash_loan.rs)
-//   - Alert dedup via Redis before broadcasting (prevents double-fire on restart)
-//   - Logs CPI metrics on high-severity alerts for forensics
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -203,7 +192,7 @@ pub async fn run(
                     continue;
                 }
 
-                // ── Log CPI metrics for forensic analysis ──────────────────────
+                // Log CPI metrics for forensic analysis 
 
                 if max_score >= 70 && tx.cpi.total_cpi_count > 5 {
                     info!(
@@ -216,7 +205,7 @@ pub async fn run(
                     );
                 }
 
-                // ── Log flash loan details ─────────────────────────────────────
+                //  Log flash loan details 
 
                 if tx.flash_evidence.detected {
                     info!(
@@ -229,7 +218,7 @@ pub async fn run(
                     );
                 }
 
-                // ── Build alert ────────────────────────────────────────────────
+                // Build alert 
 
                 let alert = build_alert(
                     &tx,

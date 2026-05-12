@@ -1,12 +1,3 @@
-// watcher/src/rules/bridge_spike.rs
-//
-// Rule 3 — Bridge Outflow Spike
-//
-// Fires if the current slot's bridge_outflow_usd exceeds the rolling
-// average from the window by `multiplier` times.
-//
-// In production (Phase 2), replace the window-average with the 10-minute
-// rolling average from PostgreSQL via db::get_bridge_outflow_avg().
 
 use crate::types::SlotSnapshot;
 

@@ -1,15 +1,3 @@
-// watcher/src/rules/tests.rs
-//
-// Unit tests for all three detection rules.
-// Tests every edge case WITHOUT needing a live validator or Redis.
-//
-// Run: cargo test -p watcher -- rules --nocapture
-//
-// These tests use fake SlotSnapshot data to verify:
-//   - Rules fire at the correct thresholds
-//   - Rules don't fire on normal data
-//   - Scores scale correctly with severity
-//   - Window size guards work correctly
 
 #[cfg(test)]
 mod rule_tests {

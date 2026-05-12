@@ -1,9 +1,3 @@
-// watcher/src/rules/tvl_velocity.rs
-//
-// Rule 2 — TVL Velocity Check
-//
-// Fires if TVL drops more than `threshold` fraction in 3 slots (~1.2 seconds).
-// Score scales with the severity of the drop, capped at 99.
 
 use crate::types::SlotSnapshot;
 

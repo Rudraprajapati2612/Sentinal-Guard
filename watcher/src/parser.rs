@@ -1,11 +1,3 @@
-// watcher/src/parser.rs
-//
-// Shared detection and parsing logic used by BOTH:
-//   - geyser.rs      (WebSocket/RPC fallback — devnet/local)
-//   - geyser_grpc.rs (Yellowstone gRPC — mainnet production)
-//
-// Nothing in this file knows about transport. It only receives
-// already-extracted slices and returns typed structs.
 
 use std::collections::HashMap;
 use yellowstone_grpc_proto::prelude::{

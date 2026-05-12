@@ -1,15 +1,3 @@
-// watcher/src/api/feed.rs
-//
-// Complete threat feed API — all endpoints the frontend needs.
-//
-// Endpoints added vs previous version:
-//   GET /protocols/:id         ← single protocol full detail
-//   GET /stats                 ← aggregate stats for Analytics page
-//   GET /tvl-history/:protocol ← TVL history for the dashboard chart
-//   GET /config                ← watcher config for Controls page
-//
-// WebSocket now sends last 10 historical alerts on connect
-// so the feed isn't empty when the page first loads.
 
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
@@ -31,7 +19,6 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::types::{AlertEvent, TvlCache};
 
-// ─── App State ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct AppState {
@@ -41,7 +28,7 @@ pub struct AppState {
     pub cfg: Config,
 }
 
-// ─── Query params ─────────────────────────────────────────────────────────────
+
 
 #[derive(Deserialize)]
 pub struct PaginationQuery {
@@ -57,7 +44,7 @@ pub struct AlertsQuery {
     search: Option<String>,
 }
 
-// ─── Response types ───────────────────────────────────────────────────────────
+
 
 #[derive(Serialize)]
 pub struct ProtocolInfo {
@@ -133,8 +120,6 @@ pub struct ConfigResponse {
     pub kafka_brokers: String,
 }
 
-// ─── Server startup ───────────────────────────────────────────────────────────
-
 pub async fn run(
     alert_tx: broadcast::Sender<AlertEvent>,
     db: DbPool,
@@ -177,8 +162,6 @@ pub async fn run(
     axum::serve(listener, app).await?;
     Ok(())
 }
-
-// ─── WebSocket ────────────────────────────────────────────────────────────────
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -236,7 +219,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-// ─── Alert endpoints ──────────────────────────────────────────────────────────
 
 async fn get_alerts(
     Query(params): Query<AlertsQuery>,
@@ -273,7 +255,6 @@ async fn get_alerts_for_protocol(
     }
 }
 
-// ─── Protocol endpoints ───────────────────────────────────────────────────────
 
 async fn get_protocols(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let tasks: Vec<_> = state.cfg.watched_programs.iter().map(|protocol| {
@@ -359,7 +340,6 @@ async fn build_protocol_info(
     }
 }
 
-// ─── Stats endpoint (Analytics page) ─────────────────────────────────────────
 
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = &state.db;
@@ -407,7 +387,6 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }).into_response()
 }
 
-// ─── TVL history endpoint (Dashboard chart) ───────────────────────────────────
 
 async fn get_tvl_history(
     Path(protocol): Path<String>,
@@ -428,7 +407,6 @@ async fn get_tvl_history(
     }
 }
 
-// ─── Config endpoint (Controls page) ─────────────────────────────────────────
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let network = if state.cfg.solana_rpc_url.contains("127.0.0.1")
@@ -457,7 +435,6 @@ async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
-// ─── Health ───────────────────────────────────────────────────────────────────
 
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({

@@ -1,4 +1,4 @@
-# SentinelGuard
+# SentinelGuard 🛡️
 
 > **Real-time on-chain exploit detection and automated protocol pause system for Solana DeFi**
 
@@ -7,6 +7,34 @@
 [![Anchor](https://img.shields.io/badge/Anchor-0.32.1-green)](https://www.anchor-lang.com/)
 [![Network](https://img.shields.io/badge/Network-Devnet-orange)](https://explorer.solana.com/?cluster=devnet)
 [![Hackathon](https://img.shields.io/badge/Colosseum-Frontier%202026-black)](https://arena.colosseum.org/hackathon)
+[![npm](https://img.shields.io/badge/npm-%40sentinelguard%2Fsdk-red)](https://www.npmjs.com/package/@sentinelguard/sdk)
+
+---
+
+Drift lost $232M on April 1st. The attack ran across 12 transactions. The data to stop it was public from slot one. Nobody had built the automated response layer.
+
+**SentinelGuard closes that window — from 22 minutes to under 400ms.**
+
+---
+
+## 🔴 Live Links
+
+| | |
+|---|---|
+| **Live Dashboard** | [sentinel-guard-three.vercel.app](https://sentinel-guard-three.vercel.app) |
+| **Documentation** | [sentinel-guard-three.vercel.app/docs/detection-rules](https://sentinel-guard-three.vercel.app/docs/detection-rules) |
+| **Demo Video (90s)** | [Watch on Loom](https://www.loom.com/share/3859ee6e1fa748a4afd9c2a5ac7ab0fd) |
+| **Pitch Video** | [Watch on Loom](https://www.loom.com/share/ffab1cb121194d8093d54562052c71c2) |
+| **npm SDK** | [@sentinelguard/sdk](https://www.npmjs.com/package/@sentinelguard/sdk) |
+
+## ✅ On-Chain Proof (Devnet)
+
+| Event | Explorer Link |
+|---|---|
+| **Pause tx — Scenario 2 (TVL Velocity)** | [View on Solana Explorer](https://explorer.solana.com/tx/3BtKhbumvRwPhDaAbhGiRPbA3iWGfbMH66Fsu8SkrSHDPx7gmau6vet8cMccbzAKuEttMMBXXNkhNg4QSo423kHQ?cluster=devnet) |
+| **Pause tx — Scenario 3 (Flash Loan Drain)** | [View on Solana Explorer](https://explorer.solana.com/tx/2QdTiQKEgBaF53Hk29ek75eo6mnaD3Cfv2fTimcUtMeDN48gbqwoLi9PsZ7Wa1nekoMoVZaajN9RQbkTMvwjNeDo?cluster=devnet) |
+
+Both transactions confirm `pause_withdrawals` fired on-chain autonomously — no human triggered them.
 
 ---
 
@@ -17,6 +45,7 @@
 - [How It Works](#how-it-works)
 - [Architecture](#architecture)
 - [Detection Rules](#detection-rules)
+- [SDK Integration](#sdk-integration)
 - [Monorepo Structure](#monorepo-structure)
 - [Program IDs](#program-ids)
 - [Prerequisites](#prerequisites)
@@ -44,11 +73,21 @@ SentinelGuard is a production-grade, real-time threat detection and automated ci
 
 The system is designed for sub-400ms detection-to-response times and includes a full operational stack: detection engine, threat feed API, webhook fan-out service, and a live monitoring dashboard.
 
+**Built solo in 4 weeks for the Colosseum Frontier Hackathon 2026.**
+
 ---
 
 ## Problem Statement
 
 DeFi exploits on Solana are fast. Flash loan attacks, TVL drain events, and bridge outflow spikes can drain millions within a single block. Protocol teams have no automated line of defense — by the time a human operator sees an alert and manually intervenes, damage is already done.
+
+| Current State | With SentinelGuard |
+|---|---|
+| Protocol team finds out via Twitter | Automated alert fires within 1 slot |
+| Manual pause requires multisig coordination | On-chain pause fires in <400ms |
+| USDC already bridged before Circle is called | Circle webhook fires automatically |
+| 0 protocols have circuit-breakers | Protocols integrate via 3-line SDK |
+| 4–22 minute response window | Under one Solana slot |
 
 SentinelGuard closes this gap by:
 
@@ -137,32 +176,64 @@ The Rust watcher runs four concurrent async tasks:
 
 SentinelGuard ships three built-in detection rules. Each rule contributes a severity score; alerts are published and/or on-chain pause is triggered based on configurable thresholds.
 
-### 1. `FlashLoanDrain`
+### Rule 1 — `FlashLoanDrain`
 
-Detects patterns consistent with flash loan–funded drain attacks: large borrows immediately followed by vault withdrawals within the same transaction or closely adjacent slots.
+Detects flash loan–funded drain attacks: large borrows immediately followed by vault withdrawals within the same transaction or closely adjacent slots.
 
-**Signals scored:**
-- Borrow instruction + vault withdrawal in same transaction
-- Withdrawal amount relative to vault TVL
-- Flash loan program involved
+- Detection via known program IDs (Solend, Marginfi, Orca — confidence 95)
+- Detection via log keywords `flash_loan` / `flash_borrow` (confidence 70)
+- Delta pattern corroboration (never standalone — prevents AMM false positives)
+- Same-signer bonus: +15 score if flash and drain share the same fee payer
+- Uses `peak_tvl` as baseline, not `oldest_tvl`
+- **Score:** `40 + drop*100*confidence_factor + same_signer_bonus` — capped at 99
 
-### 2. `TvlVelocity`
+### Rule 2 — `TvlVelocity`
 
-Detects abnormally fast TVL decline over a rolling time window. A sudden percentage drop in total protocol value locked — faster than organic withdrawal patterns — is a strong indicator of an ongoing exploit.
+Detects abnormally fast TVL decline over a rolling slot window.
 
-**Signals scored:**
-- TVL drop percentage vs. `TVL_DROP_THRESHOLD`
-- Rate of change over `WINDOW_SIZE` seconds
-- Concurrent unusual withdrawal destinations
+- TVL drop ≥ 20% in last 3 slots
+- Guards: TVL must be above $50k, absolute drop above $10k
+- **Score:** `75 + (drop - 0.20) * 100` — capped at 99
 
-### 3. `BridgeOutflowSpike`
+### Rule 3 — `BridgeOutflowSpike`
 
-Detects anomalous spikes in bridge outflow volume. A rapid increase in tokens being bridged out of the protocol (e.g., via Wormhole) relative to baseline can indicate an attacker moving stolen funds cross-chain before the protocol can respond.
+Detects anomalous spikes in bridge outflow volume indicating funds being moved cross-chain.
 
-**Signals scored:**
-- Current outflow volume vs. rolling average × `BRIDGE_SPIKE_MULTIPLIER`
-- Number of distinct destination chains
-- Overlap with known exploit patterns
+- Outflow exceeds 10× rolling average
+- **Score:** 85 at 10–20×, 95 at 20×+
+
+---
+
+## SDK Integration
+
+Install the npm SDK and add SentinelGuard to your protocol in minutes.
+
+```bash
+npm install @sentinelguard/sdk
+```
+
+```typescript
+import { SentinelClient } from "@sentinelguard/sdk";
+
+const sentinel = new SentinelClient();
+
+// Subscribe to live alerts for your protocol
+const unsubscribe = sentinel.subscribe(
+  "your_protocol_address",
+  (alert) => {
+    console.log(`Alert: ${alert.rule_triggered} — severity ${alert.severity}`);
+    if (alert.severity >= 90) triggerEmergencyProtocol();
+  }
+);
+
+// Fetch historical alerts
+const alerts = await sentinel.getAlerts("your_protocol_address");
+
+// Public threat feed — no API key required
+const threats = await sentinel.getThreats();
+```
+
+Full SDK docs: [npmjs.com/package/@sentinelguard/sdk](https://www.npmjs.com/package/@sentinelguard/sdk)
 
 ---
 
@@ -202,13 +273,11 @@ sentinelguard/
 | `sentinel_guardian` | Devnet | `2Fi9UPVbD77Cr2SerjKkpPtbejYXdaa6D4R3Pjor4kQs` |
 | `mock_protocol` | Devnet | `HyUb8Ffara4byitYExmbjbA37Ja7By8fECpG6dFyg8Ln` |
 
-> Both programs are currently deployed to **Devnet**. Mainnet deployment requires additional multisig authority setup and a formal audit.
+> Both programs are deployed to **Devnet**. Mainnet deployment requires additional multisig authority setup and a formal audit.
 
 ---
 
 ## Prerequisites
-
-Ensure all of the following are installed before proceeding:
 
 | Dependency | Version | Notes |
 |---|---|---|
@@ -244,7 +313,7 @@ Ensure all of the following are installed before proceeding:
 | `KAFKA_ALERT_TOPIC` | Kafka topic for published alerts | `sentinel.alerts` |
 | `API_PORT` | Port for threat feed HTTP API | `8080` |
 | `WEBHOOK_DISPATCHER_URL` | Internal URL of webhook dispatcher | `http://localhost:3001` |
-| `TVL_DROP_THRESHOLD` | TVL drop % to trigger TvlVelocity rule | `0.15` (15%) |
+| `TVL_DROP_THRESHOLD` | TVL drop % to trigger TvlVelocity rule | `0.15` |
 | `BRIDGE_SPIKE_MULTIPLIER` | Outflow multiplier for BridgeOutflowSpike | `3.0` |
 | `MIN_SEVERITY_TO_PAUSE` | Minimum score to trigger on-chain pause | `85` |
 | `MIN_SEVERITY_TO_PUBLISH` | Minimum score to publish an alert | `50` |
@@ -267,9 +336,7 @@ Ensure all of the following are installed before proceeding:
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token | `1234567890:ABC...` |
 | `TELEGRAM_CHAT_ID` | Telegram chat/channel ID | `-1001234567890` |
 | `CIRCLE_API_KEY` | Circle API key | `circle_...` |
-| `CIRCLE_API_URL` | Circle API base URL | `https://api.circle.com` |
 | `WORMHOLE_API_KEY` | Wormhole API key | `whorm_...` |
-| `WORMHOLE_API_URL` | Wormhole API base URL | `https://api.wormholescan.io` |
 
 ---
 
@@ -277,26 +344,16 @@ Ensure all of the following are installed before proceeding:
 
 ### 1. Start Infrastructure
 
-Spin up the local data stack (PostgreSQL, Redis, Kafka) using Docker Compose:
-
 ```bash
 cd docker-services
 docker compose up -d
-```
-
-Wait for all services to report healthy:
-
-```bash
 docker compose ps
 ```
 
 ### 2. Run Database Migrations
 
-Apply the PostgreSQL schema from the watcher migrations directory:
-
 ```bash
 cd watcher
-# Using sqlx-cli (install with: cargo install sqlx-cli)
 sqlx migrate run --database-url "$DATABASE_URL"
 ```
 
@@ -310,7 +367,7 @@ anchor build
 anchor deploy --provider.cluster devnet
 ```
 
-If using the already-deployed program IDs, update `SENTINEL_PROGRAM_ID` and `WATCHED_PROGRAMS` in your watcher `.env` accordingly. No redeploy needed.
+If using the already-deployed program IDs above, update your `.env` and skip this step.
 
 ### 4. Start the Watcher
 
@@ -318,11 +375,6 @@ If using the already-deployed program IDs, update `SENTINEL_PROGRAM_ID` and `WAT
 cd watcher
 cargo run --release
 ```
-
-The watcher will:
-- Connect to Yellowstone gRPC and begin streaming transactions
-- Initialize detection state from Redis
-- Start the HTTP + WebSocket API on `API_PORT`
 
 ### 5. Start the Webhook Dispatcher
 
@@ -340,13 +392,11 @@ npm install
 npm run dev
 ```
 
-Dashboard is available at `http://localhost:3000`.
+Dashboard available at `http://localhost:3000`.
 
 ---
 
 ## API Reference
-
-The Next.js frontend proxies watcher endpoints under `/api`. All endpoints are also available directly from the watcher at `NEXT_PUBLIC_WATCHER_HTTP_URL`.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -366,20 +416,13 @@ The Next.js frontend proxies watcher endpoints under `/api`. All endpoints are a
 
 The Next.js dashboard provides four main operational areas:
 
-### Alerts
-Live feed of all scored alerts with rule name, severity score, affected accounts, and timestamp. Color-coded by severity tier (info / warning / critical). Links to Solana Explorer for each transaction.
+**Alerts** — Live feed of all scored alerts with rule name, severity score, affected accounts, and timestamp. Color-coded by severity. Links to Solana Explorer for each transaction.
 
-### Analytics
-Time-series charts for TVL, bridge outflow volume, and alert frequency. Powered by Recharts. Useful for baselining normal protocol behavior and reviewing post-incident timelines.
+**Analytics** — Time-series charts for TVL, bridge outflow volume, and alert frequency. Useful for baselining normal protocol behavior and reviewing post-incident timelines.
 
-### Controls
-Manual override panel for operators:
-- Trigger `unpause_withdrawals` after verifying threat is neutralized
-- Adjust `MIN_SEVERITY_TO_PAUSE` and `MIN_SEVERITY_TO_PUBLISH` at runtime without restarting
-- View current watcher configuration
+**Controls** — Manual override panel: trigger `unpause_withdrawals`, adjust thresholds at runtime without restarting the watcher.
 
-### Live Monitoring
-Real-time feed of incoming transactions being scored, with per-rule signal breakdown. Useful during incident triage to understand what the detection engine is seeing.
+**Live Monitoring** — Real-time feed of incoming transactions being scored, with per-rule signal breakdown.
 
 ---
 
@@ -393,58 +436,42 @@ bun install
 bun run attack_scenarios.ts
 ```
 
-This script executes a series of exploit simulations against `mock_protocol` on Devnet, including:
-- Flash loan drain simulation
-- Rapid TVL withdrawal to trigger TvlVelocity
-- Bridge outflow spike via Wormhole mock
+Executes 5 exploit simulations against `mock_protocol` on Devnet:
 
-### Observe Alert Generation
+| Scenario | Attack Type | Expected |
+|---|---|---|
+| 1 | Normal deposits + small withdraw | NO alert |
+| 2 | Rapid 80% drain | Rule 2 fires — TVL_VELOCITY |
+| 3 | Flash borrow + drain | Rule 1 fires — FLASH_LOAN_DRAIN |
+| 4 | 10% drain below threshold | NO alert |
+| 5 | Slow cumulative drain | Rule 2 fires cumulatively |
 
-With the watcher running, alerts will appear in:
-- The terminal log (`WARN` level with full JSON payload)
-- The `/api/alerts` endpoint
-- The dashboard Alerts panel in real time
+**Scenario 3 is the recommended demo scenario** — shows a flash loan attack detected and the vault paused on-chain before the attacker can withdraw.
 
 ### Confirm Pause Execution
-
-Check the `mock_protocol` account state after a high-severity alert fires:
 
 ```bash
 solana account HyUb8Ffara4byitYExmbjbA37Ja7By8fECpG6dFyg8Ln --url devnet
 ```
 
-The `withdrawals_paused` field will be `true`. You can also verify the pause transaction in the dashboard Controls panel, which shows confirmed pause transaction signatures linkable to Solana Explorer.
+The `withdrawals_paused` field will be `true`. Confirmed pause transactions on Solana Explorer:
 
-### Inspect Webhook Outputs
-
-Watch dispatcher logs for outbound notification confirms to Discord and Telegram:
-
-```bash
-cd apps/webhook-dispatcher
-bun run start --log-level debug
-```
+- [Pause tx 1 — TVL Velocity](https://explorer.solana.com/tx/3BtKhbumvRwPhDaAbhGiRPbA3iWGfbMH66Fsu8SkrSHDPx7gmau6vet8cMccbzAKuEttMMBXXNkhNg4QSo423kHQ?cluster=devnet)
+- [Pause tx 2 — Flash Loan Drain](https://explorer.solana.com/tx/2QdTiQKEgBaF53Hk29ek75eo6mnaD3Cfv2fTimcUtMeDN48gbqwoLi9PsZ7Wa1nekoMoVZaajN9RQbkTMvwjNeDo?cluster=devnet)
 
 ---
 
 ## Security Model
 
-**Assumptions:**
-- The watcher keypair (`WATCHER_KEYPAIR_PATH`) is stored securely and has authority to call `pause_withdrawals` on the `sentinel_guardian` program.
-- The `DISPATCHER_API_SECRET` is kept confidential between the watcher and dispatcher. The dispatcher rejects any request without a valid `Authorization` header.
+- The watcher keypair (`WATCHER_KEYPAIR_PATH`) has authority to call `pause_withdrawals` on the `sentinel_guardian` program and must be stored securely.
+- The `DISPATCHER_API_SECRET` is kept confidential between the watcher and dispatcher. The dispatcher rejects requests without a valid `Authorization` header.
 - Detection rule thresholds are the primary defense-tuning surface. Misconfigured thresholds (too low) may cause false-positive pauses; (too high) may miss real attacks.
 - The system is defense-in-depth — it adds a first automated layer, but does not replace protocol-level security audits or multisig governance.
-- On-chain pause authority is intentionally held by a single keypair for hackathon demo purposes. A production deployment should use a multisig (e.g., Squads Protocol) for pause authority.
-
-**Trust Boundaries:**
-- The watcher trusts Yellowstone/Helius for transaction data integrity.
-- The dispatcher trusts the watcher for alert payloads, authenticated via shared secret.
-- The frontend trusts the watcher API; the watcher is the source of truth.
+- On-chain pause authority is held by a single keypair for hackathon demo purposes. A production deployment should use a multisig (Squads Protocol) for pause authority.
 
 ---
 
 ## Alert Severity Thresholds
-
-Severity scores are integers from 0 to 100, computed by summing weighted signals across all active detection rules for a given transaction or time window event.
 
 | Score Range | Level | Default Action |
 |---|---|---|
@@ -453,7 +480,7 @@ Severity scores are integers from 0 to 100, computed by summing weighted signals
 | 75 – 84 | HIGH | Alert published. All webhook channels notified with urgency flag. |
 | 85 – 100 | CRITICAL | Alert published + on-chain `pause_withdrawals` triggered automatically. |
 
-Thresholds are controlled by `MIN_SEVERITY_TO_PUBLISH` and `MIN_SEVERITY_TO_PAUSE` environment variables and can be updated at runtime via `POST /api/config` without restarting the watcher.
+Thresholds are controlled by `MIN_SEVERITY_TO_PUBLISH` and `MIN_SEVERITY_TO_PAUSE` and can be updated at runtime via `POST /api/config` without restarting the watcher.
 
 ---
 
@@ -461,16 +488,12 @@ Thresholds are controlled by `MIN_SEVERITY_TO_PUBLISH` and `MIN_SEVERITY_TO_PAUS
 
 | Failure Mode | Behavior |
 |---|---|
-| Geyser connection drop | Watcher reconnects with exponential backoff; no alerts lost during gap |
-| PostgreSQL unavailable | Watcher continues in-memory; alerts buffered in Redis; DB writes retried |
-| Redis unavailable | Watcher falls back to in-process state; dedup disabled temporarily |
+| Geyser connection drop | Reconnects with exponential backoff; no alerts lost during gap |
+| PostgreSQL unavailable | Continues in-memory; alerts buffered in Redis; DB writes retried |
+| Redis unavailable | Falls back to in-process state; dedup disabled temporarily |
 | Kafka unavailable | Alert publishing continues to dashboard and webhooks; Kafka writes retried on reconnect |
-| Webhook dispatcher down | Watcher retries dispatch with exponential backoff; alerts still published to dashboard |
-| On-chain pause CPI fails | Error logged with full context; alert escalated; operator notified via all webhook channels |
-
-The watcher is designed to degrade gracefully: loss of any downstream sink does not halt detection or alerting to surviving sinks.
-
-On process restart, the watcher recovers state from Redis and PostgreSQL before resuming the Geyser stream, ensuring no detection window is missed on normal restarts.
+| Webhook dispatcher down | Retries dispatch with exponential backoff; alerts still published to dashboard |
+| On-chain pause CPI fails | Error logged with full context; operator notified via all webhook channels |
 
 ---
 
@@ -478,56 +501,47 @@ On process restart, the watcher recovers state from Redis and PostgreSQL before 
 
 | Store | Data | Default Retention |
 |---|---|---|
-| PostgreSQL `alerts` | All scored alerts ≥ `MIN_SEVERITY_TO_PUBLISH` | Indefinite (configurable) |
+| PostgreSQL `alerts` | All scored alerts ≥ `MIN_SEVERITY_TO_PUBLISH` | Indefinite |
 | PostgreSQL `tvl_history` | TVL snapshots at configurable intervals | 90 days rolling |
 | PostgreSQL `outflow_history` | Bridge outflow volume per window | 90 days rolling |
 | Redis | Hot TVL state, vault balances, alert dedup keys | 24-hour TTL on dedup keys |
-| Kafka `sentinel.transactions` | Raw transaction payloads | Per broker retention config (default 7 days) |
-| Kafka `sentinel.alerts` | Alert event log | Per broker retention config (default 30 days) |
+| Kafka `sentinel.transactions` | Raw transaction payloads | 7 days (default) |
+| Kafka `sentinel.alerts` | Alert event log | 30 days (default) |
 
 ---
 
 ## Deployment Topology
 
-For a production deployment beyond the hackathon demo:
-
 ```
-                         ┌─────────────────┐
-                         │   Solana RPC /  │
-                         │ Yellowstone gRPC│
-                         └────────┬────────┘
-                                  │
-                         ┌────────▼────────┐
-                         │  Watcher (Rust) │  ← single instance, or multiple
-                         │  + Axum API     │    with leader election
-                         └───┬─────────┬───┘
-                             │         │
-               ┌─────────────▼┐       ┌▼──────────────┐
-               │  PostgreSQL  │       │     Redis      │
-               │  (primary +  │       │  (standalone / │
-               │   replica)   │       │   sentinel)    │
-               └──────────────┘       └────────────────┘
-                                              │
-                                   ┌──────────▼──────────┐
-                                   │  Kafka (3-broker     │
-                                   │  cluster for prod)   │
-                                   └──────────┬───────────┘
-                                              │
-                                   ┌──────────▼──────────┐
-                                   │  Webhook Dispatcher  │
-                                   │  (Bun, stateless,    │
-                                   │   horizontally       │
-                                   │   scalable)          │
-                                   └─────────────────────┘
+                     ┌─────────────────┐
+                     │   Solana RPC /  │
+                     │ Yellowstone gRPC│
+                     └────────┬────────┘
+                              │
+                     ┌────────▼────────┐
+                     │  Watcher (Rust) │
+                     │  + Axum API     │
+                     └───┬─────────┬───┘
+                         │         │
+           ┌─────────────▼┐       ┌▼──────────────┐
+           │  PostgreSQL  │       │     Redis      │
+           └──────────────┘       └────────────────┘
+                                          │
+                               ┌──────────▼──────────┐
+                               │        Kafka         │
+                               └──────────┬───────────┘
+                                          │
+                               ┌──────────▼──────────┐
+                               │  Webhook Dispatcher  │
+                               │  (Bun, stateless)    │
+                               └─────────────────────┘
 ```
-
-Recommended: deploy watcher and dispatcher behind a private VPC. Expose only the frontend and the threat feed API (with rate limiting and auth) publicly.
 
 ---
 
 ## Monitoring & Logging
 
-The watcher emits structured JSON logs at configurable verbosity levels (`RUST_LOG=info` for production, `debug` for development). Every alert, CPI call, and rule scoring event is logged with:
+The watcher emits structured JSON logs at configurable verbosity (`RUST_LOG=info` for production, `debug` for development). Every alert, CPI call, and rule scoring event is logged with:
 
 - `timestamp` (ISO 8601)
 - `rule` (detection rule name)
@@ -536,41 +550,31 @@ The watcher emits structured JSON logs at configurable verbosity levels (`RUST_L
 - `accounts_involved` (affected account pubkeys)
 - `action_taken` (`published` / `paused` / `none`)
 
-**Recommended monitoring stack:** ship watcher logs to a centralized log aggregator (Datadog, Grafana Loki, or AWS CloudWatch). Alert on `CRITICAL` severity log entries and on any CPI failure events as second-layer monitoring independent of the dashboard.
-
 ---
 
 ## Incident Response & Unpause Workflow
 
-When SentinelGuard automatically pauses a protocol, the following operator workflow applies:
-
-1. **Triage** — Review the triggering alert in the dashboard Alerts panel. Examine the linked transaction on Solana Explorer. Determine whether the signal is a true positive or false positive.
-
-2. **Investigate** — Use the Analytics panel to inspect TVL trends and outflow history around the incident timestamp. Review Kafka alert log for the full event sequence.
-
-3. **Neutralize (if true positive)** — Coordinate with protocol team to identify and close the exploit vector. Deploy a patched program or revoke attacker authority before unpausing.
-
-4. **Unpause** — Once confident the threat is resolved, execute unpause via the dashboard Controls panel (`POST /api/unpause`) or directly via CLI:
+1. **Triage** — Review the triggering alert in the dashboard Alerts panel. Examine the linked transaction on Solana Explorer.
+2. **Investigate** — Use the Analytics panel to inspect TVL trends and outflow history around the incident timestamp.
+3. **Neutralize** — Coordinate with the protocol team to identify and close the exploit vector before unpausing.
+4. **Unpause** — Execute unpause via the dashboard Controls panel or CLI:
 
 ```bash
-# Unpause via CLI using Anchor
 anchor run unpause --provider.cluster devnet
 ```
 
-5. **Post-mortem** — Export the incident alert timeline from `/api/alerts` and the TVL history from `/api/tvl` for post-mortem documentation.
-
-> **False positive handling:** If the pause was triggered incorrectly, unpause immediately via the Controls panel. Raise `MIN_SEVERITY_TO_PAUSE` or tune the affected rule's weights to prevent recurrence.
+5. **Post-mortem** — Export the incident alert timeline from `/api/alerts` and TVL history from `/api/tvl`.
 
 ---
 
 ## Known Limitations
 
-- **Devnet only**: This build targets Solana Devnet. Mainnet deployment requires a formal security audit of the `sentinel_guardian` program and production-grade key management.
-- **Single watcher keypair**: The pause authority is held by a single keypair. Production systems should use Squads multisig for pause authority to prevent single point of compromise.
-- **Detection rules are heuristic**: The three built-in rules cover known exploit patterns but cannot detect novel attack vectors without rule updates.
-- **No historical backfill**: The watcher only processes transactions received after startup. Historical TVL is seeded from PostgreSQL if available; otherwise the first `WINDOW_SIZE` seconds of data accumulates before velocity rules activate.
-- **Kafka is best-effort in demo mode**: For the hackathon build, Kafka is run as a single broker via Docker Compose. This is not fault-tolerant; for production, a 3-broker cluster is required.
-- **No audit**: `sentinel_guardian` has not been independently audited. Do not use in production with real protocol funds without a full audit.
+- **Devnet only** — Mainnet deployment requires a formal security audit of `sentinel_guardian` and production-grade key management.
+- **Single watcher keypair** — Production systems should use Squads multisig for pause authority.
+- **Detection rules are heuristic** — The three built-in rules cover known exploit patterns but cannot detect novel attack vectors without rule updates.
+- **No historical backfill** — The watcher only processes transactions received after startup.
+- **Kafka is single-broker in demo mode** — Not fault-tolerant; a 3-broker cluster is required for production.
+- **No audit** — `sentinel_guardian` has not been independently audited. Do not use in production with real protocol funds without a full audit.
 
 ---
 
@@ -582,17 +586,11 @@ MIT License. See [LICENSE](LICENSE) for full terms.
 
 ## Security Disclosure
 
-If you discover a security vulnerability in SentinelGuard, please disclose it responsibly. Do not open a public GitHub issue for security findings.
+If you discover a security vulnerability in SentinelGuard, please disclose responsibly. Do not open a public GitHub issue for security findings.
 
-**Security contact:** rudraprajapati2612@gmail.com
+**Contact:** rudraprajapati2612@gmail.com
 
-Please include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact assessment
-- Any suggested mitigations
-
-We aim to respond to security disclosures within 48 hours.
+Please include a description of the vulnerability, steps to reproduce, potential impact, and any suggested mitigations. We aim to respond within 48 hours.
 
 ---
 

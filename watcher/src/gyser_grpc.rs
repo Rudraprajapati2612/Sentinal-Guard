@@ -1,29 +1,3 @@
-// watcher/src/geyser_grpc.rs
-//
-// Production Yellowstone gRPC subscriber for SentinelGuard.
-// Replaces the WebSocket fallback (geyser.rs) for mainnet use.
-//
-// Differences from geyser.rs:
-//   - No separate RPC fetch per signature — Yellowstone pushes the full tx
-//   - No seen_signatures dedup via Instant (handled differently, see below)
-//   - No PubsubClient / RpcClient — replaced by GeyserGrpcClient
-//   - All detection logic (detect_flash_loan, parse_token_deltas, etc.)
-//     is shared from parser.rs — this file only handles transport + mapping
-//
-// Provider compatibility:
-//   - Helius     : set GEYSER_ENDPOINT=https://mainnet.helius-rpc.com
-//                  set GEYSER_TOKEN=<your-api-key>
-//   - Triton     : set GEYSER_ENDPOINT=<your-triton-endpoint>
-//                  set GEYSER_TOKEN=<your-token>
-//   - Self-hosted: set GEYSER_ENDPOINT=http://localhost:10000
-//                  leave GEYSER_TOKEN empty
-//
-// Cargo.toml additions required:
-//   yellowstone-grpc-client = "5"
-//   yellowstone-grpc-proto  = "5"
-//   prost                   = "0.13"
-//   prost-types             = "0.13"
-//   tonic                   = { version = "0.12", features = ["tls", "tls-roots"] }
 
 use anyhow::{Context, Result};
 use futures::StreamExt;

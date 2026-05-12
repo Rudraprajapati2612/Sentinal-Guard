@@ -1,8 +1,3 @@
-// watcher/src/geyser.rs
-//
-// Temporary subscriber implementation for environments without Yellowstone
-// gRPC access. Uses Solana/Helius WebSocket log subscriptions plus
-// per-signature JSON-RPC transaction fetches to reconstruct ParsedTransaction.
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
