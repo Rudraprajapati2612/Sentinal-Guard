@@ -17,8 +17,8 @@ export default function CodeBlock({
 
   const handleCopy = () => {
     if (codeRef.current) {
-      const textToCopy = codeRef.current.innerText || codeRef.current.textContent || '';
-      navigator.clipboard.writeText(textToCopy).then(() => {
+      const text = codeRef.current.innerText || codeRef.current.textContent || '';
+      navigator.clipboard.writeText(text).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       });
@@ -28,9 +28,14 @@ export default function CodeBlock({
   return (
     <div className="overflow-hidden rounded-[12px] bg-[#0F172A] shadow-sm">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#93C5FD]">
-          {filename}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#93C5FD]">
+            {filename}
+          </span>
+          <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[#475569]">
+            {lang}
+          </span>
+        </div>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1.5 text-[12px] text-[#64748B] transition hover:text-[#E2E8F0]"
@@ -40,9 +45,6 @@ export default function CodeBlock({
         </button>
       </div>
       <div className="px-6 py-5">
-        <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">
-          {lang}
-        </div>
         <pre className="overflow-x-auto text-[13px] leading-6 text-[#E2E8F0]">
           <code ref={codeRef}>{children}</code>
         </pre>

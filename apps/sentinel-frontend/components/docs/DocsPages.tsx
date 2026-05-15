@@ -1,9 +1,6 @@
 import Link from 'next/link';
 import {
-  BookOpen,
-  Check,
   Code2,
-  Copy,
   ChevronRight,
   Globe,
   Info,
@@ -16,14 +13,13 @@ import {
 } from 'lucide-react';
 import ArchitectureFlow from '@/components/docs/ArchitectureFlow';
 import CodeBlock from '@/components/docs/CodeBlock';
-import Feedback from '@/components/docs/Feedback';
+import FaqAccordion from '@/components/docs/FaqAccordion';
 
 type TocItem = { id: string; label: string };
 
 export type DocsPageConfig = {
   toc: TocItem[];
   content: React.ReactNode;
-  sidebarVariant: 'introduction' | 'quickstart';
 };
 
 function Breadcrumb({ items }: { items: string[] }) {
@@ -31,8 +27,7 @@ function Breadcrumb({ items }: { items: string[] }) {
     <nav className="mb-6 flex items-center gap-1.5 text-[12px] text-[#94A3B8]">
       {items.map((item, index) => {
         const isLast = index === items.length - 1;
-        const href =
-          item === 'Docs' || item === 'Getting Started' ? '/docs/introduction' : undefined;
+        const href = item === 'Docs' ? '/docs/introduction' : undefined;
 
         return (
           <span key={`${item}-${index}`} className="flex items-center gap-1.5">
@@ -69,7 +64,7 @@ function FeatureCard({
   description: string;
 }) {
   return (
-    <div className="rounded-[12px] border border-[#E2E8F0] bg-white p-5 shadow-sm">
+    <div className="rounded-[12px] border border-[#E2E8F0] bg-white p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#BFDBFE] hover:shadow-md">
       <div className="mb-3 flex items-center gap-3">
         <span className="text-[22px]" aria-hidden="true">
           {icon}
@@ -85,27 +80,35 @@ function TimelineStep({
   time,
   label,
   tone,
+  index,
 }: {
   time: string;
   label: string;
   tone: 'critical' | 'warning' | 'late';
+  index: number;
 }) {
   const dotColor =
     tone === 'critical' ? 'bg-[#EF4444]' : tone === 'warning' ? 'bg-[#F59E0B]' : 'bg-[#0F172A]';
+  const pulse = tone === 'critical' ? 'animate-pulse' : '';
 
   return (
-    <div className="relative flex min-w-[120px] flex-1 flex-col items-center text-center">
-      <span className={`mb-3 h-3 w-3 rounded-full ${dotColor}`} />
+    <div
+      className="relative flex min-w-[120px] flex-1 flex-col items-center text-center"
+      style={{ animation: `slideUp 0.35s ease-out ${index * 0.1}s both` }}
+    >
+      <span className={`mb-3 h-3 w-3 rounded-full ${dotColor} ${pulse}`} />
       <p className="text-[12px] font-semibold text-[#0F172A]">{time}</p>
       <p className="mt-1 max-w-[120px] text-[12px] leading-5 text-[#64748B]">{label}</p>
     </div>
   );
 }
 
-function StatCard({ value, label }: { value: string; label: string }) {
+function StatCard({ value, label, accent }: { value: string; label: string; accent?: boolean }) {
   return (
-    <div className="rounded-2xl border border-[#E2E8F0] bg-white px-5 py-5 text-center shadow-sm">
-      <p className="text-[28px] font-bold tracking-tight text-[#0F172A]">{value}</p>
+    <div className={`rounded-2xl border px-5 py-5 text-center shadow-sm transition-all duration-200 hover:shadow-md ${
+      accent ? 'border-[#BFDBFE] bg-[#EFF6FF]' : 'border-[#E2E8F0] bg-white'
+    }`}>
+      <p className={`text-[28px] font-bold tracking-tight ${accent ? 'text-[#2563EB]' : 'text-[#0F172A]'}`}>{value}</p>
       <p className="mt-2 text-[13px] leading-5 text-[#64748B]">{label}</p>
     </div>
   );
@@ -149,7 +152,7 @@ function RequirementCard({
   subtext: string;
 }) {
   return (
-    <div className="rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-sm transition-all duration-200 hover:border-[#BFDBFE] hover:shadow-md">
       <div className="flex items-center gap-3">
         <span className="text-[20px]" aria-hidden="true">
           {icon}
@@ -175,21 +178,6 @@ function RequirementBadge({ required }: { required: boolean }) {
   );
 }
 
-function ComingSoonContent({ title }: { title: string }) {
-  return (
-    <article className="mx-auto max-w-4xl px-6 py-20 flex flex-col items-center justify-center text-center">
-      <div className="w-16 h-16 bg-[#EFF6FF] rounded-2xl flex items-center justify-center mb-6 border border-[#2563EB]/20">
-        <Code2 size={28} className="text-[#2563EB]" />
-      </div>
-      <h1 className="text-[32px] font-bold tracking-tight text-[#0F172A] mb-3">
-        {title}
-      </h1>
-      <p className="text-[16px] leading-7 text-[#64748B] max-w-[500px]">
-        This section is currently under construction. We are working hard to bring you comprehensive documentation for this feature. Check back soon!
-      </p>
-    </article>
-  );
-}
 
 function IntroContent() {
   return (
@@ -224,11 +212,11 @@ function IntroContent() {
           <div className="px-5 py-6 sm:px-6">
             <div className="relative flex flex-col gap-8 md:flex-row md:items-start md:justify-between md:gap-3">
               <div className="absolute top-1.5 left-0 hidden h-px w-full border-t-2 border-dotted border-[#CBD5E1] md:block" />
-              <TimelineStep time="T+0s" label='🔴 "Attack begins"' tone="critical" />
-              <TimelineStep time="T+8s" label='🔴 "Vault drained"' tone="critical" />
-              <TimelineStep time="T+4min" label='🟡 "Team sees Twitter alert"' tone="warning" />
-              <TimelineStep time="T+18min" label='🟡 "Multisig submitted"' tone="warning" />
-              <TimelineStep time="T+22min" label='⚫ "Funds bridged — too late"' tone="late" />
+              <TimelineStep index={0} time="T+0s"    label='🔴 "Attack begins"'            tone="critical" />
+              <TimelineStep index={1} time="T+8s"    label='🔴 "Vault drained"'             tone="critical" />
+              <TimelineStep index={2} time="T+4min"  label='🟡 "Team sees Twitter alert"'   tone="warning" />
+              <TimelineStep index={3} time="T+18min" label='🟡 "Multisig submitted"'        tone="warning" />
+              <TimelineStep index={4} time="T+22min" label='⚫ "Funds bridged — too late"'  tone="late" />
             </div>
           </div>
           <div className="bg-[#EF4444] px-5 py-3 text-[13px] font-semibold text-white sm:px-6">
@@ -275,21 +263,25 @@ function IntroContent() {
       </section>
 
       <section id="real-world-reference" data-section className="mb-14 scroll-mt-20">
-        <SectionTitle title="Real World Reference" />
-        <div className="mt-6 rounded-2xl border-l-4 border-l-[#2563EB] bg-white p-6 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+        <SectionTitle title="Hypothetical Scenario" />
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#F59E0B]/30 bg-[#FFFBEB] px-3 py-1">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#F59E0B]" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#92400E]">Simulated scenario — not a real event</span>
+        </div>
+        <div className="mt-2 rounded-2xl border-l-4 border-l-[#2563EB] bg-white p-6 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
           <div className="flex items-start gap-3">
             <ShieldAlert size={20} className="mt-0.5 flex-shrink-0 text-[#2563EB]" />
             <p className="text-[15px] leading-7 text-[#475569]">
-              On April 1st 2026, Drift Protocol lost $232M in a drain that ran across
-              ~12 transactions over ~8 seconds. SentinelGuard would have detected it after
-              transaction 2-3 and paused withdrawals before transaction 4 fired.
+              Imagine a protocol loses $232M in a drain that runs across ~12 transactions over ~8 seconds —
+              the pattern of the Drift Protocol class of exploits. SentinelGuard would detect the anomaly after
+              transaction 2–3 and pause withdrawals before transaction 4 fires.
             </p>
           </div>
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
           <StatCard value="70-80%" label="Estimated funds that could have been saved" />
-          <StatCard value="400ms" label="Time from detection to on-chain pause" />
+          <StatCard value="400ms" label="Time from detection to on-chain pause" accent />
           <StatCard value="Tx 2-3" label="When detection would have triggered" />
         </div>
       </section>
@@ -314,7 +306,7 @@ function IntroContent() {
           />
           <NextStepCard
             href="/docs/how-it-works"
-            icon={<Plug size={24} aria-hidden="true" />}
+            icon={<Radar size={24} aria-hidden="true" />}
             title="How It Works"
             desc="Follow the full monitoring-to-response lifecycle inside the platform."
           />
@@ -500,7 +492,6 @@ Geyser connected. Watching 1 program.`}
         </div>
       </section>
 
-      <Feedback />
     </article>
   );
 }
@@ -587,7 +578,7 @@ function HowItWorksContent() {
             not stack.
           </p>
 
-          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#F97316] bg-white p-6 shadow-sm">
+          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#F97316] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[#FFF7ED] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#F97316]">
                 Rule 1
@@ -621,7 +612,7 @@ function HowItWorksContent() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#EF4444] bg-white p-6 shadow-sm">
+          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#EF4444] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[#FEF2F2] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#EF4444]">
                 Rule 2
@@ -655,7 +646,7 @@ function HowItWorksContent() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#8B5CF6] bg-white p-6 shadow-sm">
+          <div className="rounded-xl border border-[#E2E8F0] border-l-4 border-l-[#8B5CF6] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[#F5F3FF] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#8B5CF6]">
                 Rule 3
@@ -752,7 +743,10 @@ function HowItWorksContent() {
           ].map(([color, title, body], index, array) => (
             <div key={title} className="flex gap-4">
               <div className="flex w-5 flex-col items-center">
-                <span className="mt-1 h-3 w-3 rounded-full" style={{ backgroundColor: color as string }} />
+                <span
+                  className={`mt-1 h-3 w-3 rounded-full ${(color === '#EF4444' || color === '#F97316') ? 'animate-pulse' : ''}`}
+                  style={{ backgroundColor: color as string }}
+                />
                 {index < array.length - 1 ? <div className="mt-2 h-full w-0.5 bg-[#E2E8F0]" /> : null}
               </div>
               <div className="pb-8">
@@ -809,7 +803,7 @@ function HowItWorksContent() {
             desc="Add SentinelGuard to your protocol in 3 lines."
           />
           <NextStepCard
-            href="/docs/how-detection-works#alert-lifecycle"
+            href="/docs/how-it-works#alert-lifecycle"
             icon={<Radar size={24} aria-hidden="true" />}
             title="Alert Lifecycle"
             desc="Full flow from slot event to on-chain pause."
@@ -1096,7 +1090,7 @@ else:
           <SectionTitle title="Next Steps" />
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <NextStepCard
-              href="/docs/how-detection-works"
+              href="/docs/how-it-works"
               icon={<Zap size={24} aria-hidden="true" />}
               title="How Detection Works"
               desc="See the full signal intake and rule engine pipeline."
@@ -1108,7 +1102,7 @@ else:
               desc="Wire SentinelGuard into your protocol in 3 lines."
             />
             <NextStepCard
-              href="/docs/how-detection-works#alert-lifecycle"
+              href="/docs/how-it-works#alert-lifecycle"
               icon={<Radar size={24} aria-hidden="true" />}
               title="Alert Lifecycle"
               desc="From scored alert to on-chain pause — full flow."
@@ -1177,6 +1171,75 @@ pub fn initialize_sentinel(ctx: Context<InitializeSentinel>, watcher_key: Pubkey
           </CodeBlock>
         </div>
       </section>
+
+      <section id="pause-instruction" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="3. Pause Instruction" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          Expose a <code>pause_withdrawals</code> instruction that the off-chain watcher calls via CPI when a critical alert fires. The <code>constraint</code> ensures only the authorized watcher keypair can trigger it.
+        </p>
+        <div className="mt-5">
+          <CodeBlock lang="rust" filename="instructions/pause.rs">
+{`#[derive(Accounts)]
+pub struct PauseWithdrawals<'info> {
+    pub watcher: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"sentinel_state"],
+        bump = sentinel_state.bump,
+        constraint = sentinel_state.authorized_watcher == watcher.key()
+            @ ErrorCode::UnauthorizedWatcher
+    )]
+    pub sentinel_state: Account<'info, SentinelState>,
+}
+
+pub fn pause_withdrawals(ctx: Context<PauseWithdrawals>) -> Result<()> {
+    let state = &mut ctx.accounts.sentinel_state;
+    state.paused = true;
+    state.last_alert_slot = Clock::get()?.slot;
+    Ok(())
+}`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4 rounded-lg border-l-[3px] border-[#F59E0B] bg-[#FFFBEB] p-4">
+          <p className="text-[14px] leading-7 text-[#92400E]">
+            The watcher keypair must match <code>authorized_watcher</code> set during initialization. If the keys don't match, the CPI fails and the pause does not execute.
+          </p>
+        </div>
+      </section>
+
+      <section id="circuit-breaker" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="4. Circuit Breaker Check" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          In every instruction where funds leave your protocol — <code>withdraw</code>, <code>borrow</code>, <code>flash_loan</code> — pass the <code>SentinelState</code> account and assert it is not paused. This is a single <code>require!</code> at the top of the handler.
+        </p>
+        <div className="mt-5">
+          <CodeBlock lang="rust" filename="instructions/withdraw.rs">
+{`#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    // ... your standard accounts ...
+
+    #[account(
+        seeds = [b"sentinel_state"],
+        bump = sentinel_state.bump
+    )]
+    pub sentinel_state: Account<'info, SentinelState>,
+}
+
+pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+    // Circuit breaker — one line blocks all withdrawals when paused
+    require!(!ctx.accounts.sentinel_state.paused, ErrorCode::ProtocolPaused);
+
+    // ... rest of your withdrawal logic unchanged ...
+    Ok(())
+}`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4 rounded-lg border-l-[3px] border-[#22C55E] bg-[#F0FDF4] p-4">
+          <p className="text-[14px] leading-7 text-[#166534]">
+            Once <code>paused = true</code> is set on the PDA, every subsequent withdrawal reverts instantly with <code>ProtocolPaused</code> — no further action required until an admin resets the state.
+          </p>
+        </div>
+      </section>
     </article>
   );
 }
@@ -1190,42 +1253,188 @@ function SdkReferenceContent() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#2563EB]">INTEGRATION</span>
         </div>
         <h1 className="max-w-3xl text-[36px] font-bold tracking-tight text-[#0F172A]">SDK Reference</h1>
-        <p className="mt-4 max-w-3xl text-[16px] leading-7 text-[#64748B]">Add the circuit breaker check to your withdrawal instructions.</p>
+        <p className="mt-4 max-w-3xl text-[16px] leading-7 text-[#64748B]">
+          The <code>@sentinelguard/sdk</code> npm package gives any TypeScript or JavaScript application instant access to SentinelGuard's real-time threat feed — no infrastructure required.
+        </p>
       </div>
-      <section id="enforcing-the-pause" data-section className="mb-12 scroll-mt-20">
-        <SectionTitle title="Enforcing the Pause" />
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">In every instruction where funds leave your protocol (withdraw, borrow, flash loan), pass the SentinelState account and assert that it is not paused.</p>
+
+      {/* Installation */}
+      <section id="installation" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Installation" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Install via your preferred package manager.</p>
+        <div className="mt-5 space-y-3">
+          <CodeBlock lang="bash" filename="npm">
+{`npm install @sentinelguard/sdk`}
+          </CodeBlock>
+          <CodeBlock lang="bash" filename="yarn">
+{`yarn add @sentinelguard/sdk`}
+          </CodeBlock>
+          <CodeBlock lang="bash" filename="bun">
+{`bun add @sentinelguard/sdk`}
+          </CodeBlock>
+        </div>
+      </section>
+
+      {/* Quick Start */}
+      <section id="quick-start" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Quick Start" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Create a client and start listening for live exploit alerts in seconds.</p>
         <div className="mt-5">
-          <CodeBlock lang="rust" filename="instructions/withdraw.rs">
-{`use anchor_lang::prelude::*;
-use crate::state::SentinelState;
-use crate::error::ErrorCode;
+          <CodeBlock lang="typescript" filename="index.ts">
+{`import SentinelClient from '@sentinelguard/sdk';
 
-#[derive(Accounts)]
-pub struct Withdraw<'info> {
-    // ... your standard accounts ...
-    
-    #[account(
-        seeds = [b"sentinel_state"],
-        bump = sentinel_state.bump
-    )]
-    pub sentinel_state: Account<'info, SentinelState>,
-}
+const client = new SentinelClient();
 
-pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-    // Line 1: Circuit breaker check
-    require!(!ctx.accounts.sentinel_state.paused, ErrorCode::ProtocolPaused);
-    
-    // Line 2: Process standard withdrawal logic
-    // ...
-    Ok(())
+// Subscribe to real-time alerts for your protocol
+const unsubscribe = client.subscribe(
+  'YOUR_PROTOCOL_ADDRESS',
+  (alert) => {
+    console.log(\`Alert fired: \${alert.rule_triggered} — severity \${alert.severity}\`);
+    console.log(\`At risk: $\${alert.estimated_at_risk_usd.toLocaleString()}\`);
+  }
+);
+
+// Later, clean up the WebSocket connection
+unsubscribe();`}
+          </CodeBlock>
+        </div>
+      </section>
+
+      {/* SentinelClient */}
+      <section id="sentinelclient" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="SentinelClient" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">The main entry point. By default it connects to the hosted SentinelGuard API — pass a custom <code>SentinelConfig</code> to point at a self-hosted instance.</p>
+        <div className="mt-5">
+          <CodeBlock lang="typescript" filename="client.ts">
+{`import SentinelClient, { SentinelConfig } from '@sentinelguard/sdk';
+
+const config: SentinelConfig = {
+  apiUrl: 'https://sentinel-guard-three.vercel.app', // optional, this is the default
+  wsUrl:  'wss://sentinel-guard-three.vercel.app',   // optional
+};
+
+const client = new SentinelClient(config);`}
+          </CodeBlock>
+        </div>
+        <div className="mt-6 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
+          <table className="w-full text-left text-[13px]">
+            <thead className="bg-[#F8F9FC]">
+              <tr className="border-b border-[#E2E8F0]">
+                <th className="px-4 py-3 text-[12px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">Config Field</th>
+                <th className="px-4 py-3 text-[12px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">Type</th>
+                <th className="px-4 py-3 text-[12px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">Description</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#E2E8F0] text-[#0F172A]">
+              <tr>
+                <td className="px-4 py-3 font-mono text-[#2563EB]">apiUrl</td>
+                <td className="px-4 py-3 text-[#64748B]">string?</td>
+                <td className="px-4 py-3">Base URL for REST endpoints. Defaults to the hosted API.</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 font-mono text-[#2563EB]">wsUrl</td>
+                <td className="px-4 py-3 text-[#64748B]">string?</td>
+                <td className="px-4 py-3">WebSocket base URL. Defaults to the hosted WebSocket server.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Methods */}
+      <section id="methods" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Methods" />
+
+        {/* subscribe */}
+        <div className="mt-6 rounded-xl border border-[#E2E8F0] bg-white p-6">
+          <h3 className="font-mono text-[15px] font-semibold text-[#0F172A]">
+            subscribe(protocolAddress, onAlert) → {'() => void'}
+          </h3>
+          <p className="mt-2 text-[13px] leading-6 text-[#64748B]">Opens a WebSocket connection to the live feed and calls <code>onAlert</code> each time an alert arrives for the given protocol address. Returns an <code>unsubscribe</code> function that closes the socket.</p>
+          <div className="mt-4">
+            <CodeBlock lang="typescript" filename="subscribe.ts">
+{`const unsubscribe = client.subscribe(
+  '9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K',
+  (alert) => {
+    if (alert.severity >= 80) {
+      triggerEmergencyAlert(alert);
+    }
+  }
+);`}
+            </CodeBlock>
+          </div>
+        </div>
+
+        {/* getAlerts */}
+        <div className="mt-4 rounded-xl border border-[#E2E8F0] bg-white p-6">
+          <h3 className="font-mono text-[15px] font-semibold text-[#0F172A]">
+            getAlerts(protocolAddress) → {'Promise<Alert[]>'}
+          </h3>
+          <p className="mt-2 text-[13px] leading-6 text-[#64748B]">Fetches historical alerts for a specific protocol address via the REST API.</p>
+          <div className="mt-4">
+            <CodeBlock lang="typescript" filename="getAlerts.ts">
+{`const alerts = await client.getAlerts('9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K');
+alerts.forEach((a) => console.log(a.rule_triggered, a.created_at));`}
+            </CodeBlock>
+          </div>
+        </div>
+
+        {/* getThreats */}
+        <div className="mt-4 rounded-xl border border-[#E2E8F0] bg-white p-6">
+          <h3 className="font-mono text-[15px] font-semibold text-[#0F172A]">
+            getThreats() → {'Promise<Alert[]>'}
+          </h3>
+          <p className="mt-2 text-[13px] leading-6 text-[#64748B]">Returns the full public threat feed — all alerts across all protocols. No API key required.</p>
+          <div className="mt-4">
+            <CodeBlock lang="typescript" filename="getThreats.ts">
+{`const threats = await client.getThreats();
+console.log(\`\${threats.length} total threats detected\`);`}
+            </CodeBlock>
+          </div>
+        </div>
+
+        {/* isPaused */}
+        <div className="mt-4 rounded-xl border border-[#E2E8F0] bg-white p-6">
+          <h3 className="font-mono text-[15px] font-semibold text-[#0F172A]">
+            isPaused(protocolAddress) → {'Promise<boolean>'}
+          </h3>
+          <p className="mt-2 text-[13px] leading-6 text-[#64748B]">Checks whether a protocol is currently in a paused state.</p>
+          <div className="mt-4">
+            <CodeBlock lang="typescript" filename="isPaused.ts">
+{`const paused = await client.isPaused('9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K');
+if (paused) {
+  console.log('Protocol is currently paused — withdrawals locked.');
+}`}
+            </CodeBlock>
+          </div>
+        </div>
+      </section>
+
+      {/* Alert type */}
+      <section id="alert-type" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Alert Type" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">All methods that return alerts use the <code>Alert</code> interface exported from the package.</p>
+        <div className="mt-5">
+          <CodeBlock lang="typescript" filename="types.ts">
+{`import { Alert } from '@sentinelguard/sdk';
+
+interface Alert {
+  id: string;                      // Unique alert identifier
+  protocol: string;                // Protocol public key
+  rule_triggered: string;          // e.g. "FLASH_LOAN_DRAIN"
+  severity: number;                // Score 0–99
+  estimated_at_risk_usd: number;   // USD value at risk
+  on_chain_tx: string | null;      // Transaction signature, if available
+  slot: number;                    // Solana slot number
+  created_at: string;              // ISO 8601 timestamp
 }`}
           </CodeBlock>
         </div>
-        <div className="mt-5 rounded-lg border-l-[3px] border-[#F59E0B] bg-[#FFFBEB] p-4">
-          <p className="text-[14px] leading-7 text-[#92400E]">If a critical alert triggers, the watcher calls your <code>pause()</code> instruction. Within 400ms, <code>paused</code> becomes true, and all subsequent withdraws revert instantly.</p>
-        </div>
       </section>
+
+      <div className="mt-5 rounded-lg border-l-[3px] border-[#2563EB] bg-[#EFF6FF] p-4">
+        <p className="text-[14px] leading-7 text-[#1E40AF]">The SDK ships full TypeScript typings. Both ESM (<code>import</code>) and CommonJS (<code>require</code>) are supported out of the box.</p>
+      </div>
     </article>
   );
 }
@@ -1239,23 +1448,21 @@ function WebhookSetupContent() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#2563EB]">INTEGRATION</span>
         </div>
         <h1 className="max-w-3xl text-[36px] font-bold tracking-tight text-[#0F172A]">Webhook Setup</h1>
-        <p className="mt-4 max-w-3xl text-[16px] leading-7 text-[#64748B]">Receive immediate notifications in Discord or Slack when an alert fires.</p>
+        <p className="mt-4 max-w-3xl text-[16px] leading-7 text-[#64748B]">Receive immediate notifications in Discord or Telegram when an alert fires.</p>
       </div>
-      <section id="configuration" data-section className="mb-12 scroll-mt-20">
-        <SectionTitle title="Configuration" />
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Set your webhook URL in the watcher's environment file. Currently, Discord-compatible webhooks are supported out of the box.</p>
+
+      <section id="discord" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Discord" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          Create a webhook in your Discord server under <strong>Server Settings → Integrations → Webhooks</strong>, copy the URL, and add it to the watcher environment file.
+        </p>
         <div className="mt-5">
-          <CodeBlock lang="bash" filename=".env">
-{`# Add this to watcher/.env
-DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/12345/abcdef..."`}
+          <CodeBlock lang="bash" filename="watcher/.env">
+{`DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/12345/abcdef..."`}
           </CodeBlock>
         </div>
-      </section>
-      <section id="payload-example" data-section className="mb-12 scroll-mt-20">
-        <SectionTitle title="Payload Example" />
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">When an alert fires, a JSON payload is POSTed to your webhook endpoint.</p>
         <div className="mt-5">
-          <CodeBlock lang="json" filename="payload.json">
+          <CodeBlock lang="json" filename="discord-payload.json">
 {`{
   "embeds": [{
     "title": "🚨 SentinelGuard Alert: CRITICAL",
@@ -1263,13 +1470,50 @@ DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/12345/abcdef..."`}
     "color": 16711680,
     "fields": [
       { "name": "Alert ID", "value": "a1b2c3d4", "inline": true },
-      { "name": "Score", "value": "95", "inline": true },
-      { "name": "Slot", "value": "245012344", "inline": true },
-      { "name": "At Risk", "value": "$125,000", "inline": false }
+      { "name": "Score",    "value": "95",       "inline": true },
+      { "name": "Slot",     "value": "245012344","inline": true },
+      { "name": "At Risk",  "value": "$125,000", "inline": false }
     ]
   }]
 }`}
           </CodeBlock>
+        </div>
+      </section>
+
+      <section id="telegram" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Telegram" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          Create a bot via <strong>@BotFather</strong> on Telegram to get a bot token, then get your chat ID by messaging <strong>@userinfobot</strong>. Add both to the watcher environment file.
+        </p>
+        <div className="mt-5">
+          <CodeBlock lang="bash" filename="watcher/.env">
+{`TELEGRAM_BOT_TOKEN="7123456789:AAHdqTcvCH1vGWJxfSeofShs0K84aaaaaa"
+TELEGRAM_CHAT_ID="-1001234567890"`}
+          </CodeBlock>
+        </div>
+        <div className="mt-5">
+          <CodeBlock lang="json" filename="telegram-payload.json">
+{`{
+  "chat_id": "-1001234567890",
+  "text": "🚨 SentinelGuard Alert: CRITICAL\n\nRule: TVL_VELOCITY\nScore: 95\nAt Risk: $125,000\nSlot: 245012344\nProtocol: 9W95...",
+  "parse_mode": "Markdown"
+}`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4 rounded-lg border-l-[3px] border-[#2563EB] bg-[#EFF6FF] p-4">
+          <p className="text-[14px] leading-7 text-[#1E40AF]">
+            For group chats, the <code>chat_id</code> is negative (starts with <code>-100</code>). For direct messages to a user, it is a positive integer.
+          </p>
+        </div>
+      </section>
+
+      <section id="payload-example" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Choosing a Channel" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">You can configure both at the same time — the watcher dispatcher fans out to all configured channels via <code>Promise.allSettled</code>, so a failure in one does not block the other.</p>
+        <div className="mt-5 rounded-lg border-l-[3px] border-[#F59E0B] bg-[#FFFBEB] p-4">
+          <p className="text-[14px] leading-7 text-[#92400E]">
+            If neither <code>DISCORD_WEBHOOK_URL</code> nor <code>TELEGRAM_BOT_TOKEN</code> is set, alerts are still logged internally but no external notification is sent.
+          </p>
         </div>
       </section>
     </article>
@@ -1305,6 +1549,11 @@ function AlertSchemaContent() {
                 <td className="px-4 py-3">Unique hex identifier for the alert.</td>
               </tr>
               <tr>
+                <td className="px-4 py-3 font-mono text-[#2563EB]">protocol</td>
+                <td className="px-4 py-3 text-[#64748B]">string</td>
+                <td className="px-4 py-3">Public key of the monitored protocol.</td>
+              </tr>
+              <tr>
                 <td className="px-4 py-3 font-mono text-[#2563EB]">rule_triggered</td>
                 <td className="px-4 py-3 text-[#64748B]">string</td>
                 <td className="px-4 py-3">One of: <code>FLASH_LOAN_DRAIN</code>, <code>TVL_VELOCITY</code>, <code>BRIDGE_SPIKE</code>.</td>
@@ -1312,10 +1561,10 @@ function AlertSchemaContent() {
               <tr>
                 <td className="px-4 py-3 font-mono text-[#2563EB]">severity</td>
                 <td className="px-4 py-3 text-[#64748B]">number</td>
-                <td className="px-4 py-3">Calculated score (0-99).</td>
+                <td className="px-4 py-3">Calculated score (0–99).</td>
               </tr>
               <tr>
-                <td className="px-4 py-3 font-mono text-[#2563EB]">at_risk_amount</td>
+                <td className="px-4 py-3 font-mono text-[#2563EB]">estimated_at_risk_usd</td>
                 <td className="px-4 py-3 text-[#64748B]">number</td>
                 <td className="px-4 py-3">Estimated USD value affected in the slot.</td>
               </tr>
@@ -1325,17 +1574,36 @@ function AlertSchemaContent() {
                 <td className="px-4 py-3">The Solana slot number where the event occurred.</td>
               </tr>
               <tr>
-                <td className="px-4 py-3 font-mono text-[#2563EB]">pause_tx_signature</td>
+                <td className="px-4 py-3 font-mono text-[#2563EB]">on_chain_tx</td>
                 <td className="px-4 py-3 text-[#64748B]">string | null</td>
-                <td className="px-4 py-3">Transaction hash of the automated pause CPI, if executed.</td>
+                <td className="px-4 py-3">Transaction signature of the automated pause CPI, if executed.</td>
               </tr>
               <tr>
                 <td className="px-4 py-3 font-mono text-[#2563EB]">created_at</td>
                 <td className="px-4 py-3 text-[#64748B]">string</td>
-                <td className="px-4 py-3">ISO8601 timestamp.</td>
+                <td className="px-4 py-3">ISO 8601 timestamp.</td>
               </tr>
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section id="example-payload" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Example Payload" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">A real alert object returned by the REST API or emitted over the WebSocket feed.</p>
+        <div className="mt-5">
+          <CodeBlock lang="json" filename="alert.json">
+{`{
+  "id": "a1b2c3d4e5f6",
+  "protocol": "9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K",
+  "rule_triggered": "TVL_VELOCITY",
+  "severity": 87,
+  "estimated_at_risk_usd": 125000,
+  "on_chain_tx": "5KtPn1LGuxhFiwjxErkxTb57Jvmh4Me5GA4K9v7FWE1vL4jE8D2m8HrZ3bVtBQzPLr",
+  "slot": 245012344,
+  "created_at": "2026-05-15T10:23:41.000Z"
+}`}
+          </CodeBlock>
         </div>
       </section>
     </article>
@@ -1359,7 +1627,7 @@ function RestEndpointsContent() {
           <span className="rounded bg-[#16A34A] px-2 py-1 text-[11px] font-bold text-white">GET</span>
           <h2 className="text-[20px] font-semibold tracking-tight text-[#0F172A]">/api/alerts</h2>
         </div>
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Returns a paginated list of alerts.</p>
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Returns a paginated list of alerts across all monitored protocols.</p>
         <div className="mt-5 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
           <table className="w-full text-left text-[13px]">
             <thead className="bg-[#F8F9FC]">
@@ -1371,11 +1639,33 @@ function RestEndpointsContent() {
             <tbody className="divide-y divide-[#E2E8F0]">
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">limit</td><td className="px-4 py-3 text-[#64748B]">Results per page (default: 25)</td></tr>
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">offset</td><td className="px-4 py-3 text-[#64748B]">Pagination offset (default: 0)</td></tr>
+              <tr><td className="px-4 py-3 font-mono text-[#0F172A]">protocol</td><td className="px-4 py-3 text-[#64748B]">Filter by protocol pubkey</td></tr>
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">rule_triggered</td><td className="px-4 py-3 text-[#64748B]">Filter by rule string</td></tr>
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">min_severity</td><td className="px-4 py-3 text-[#64748B]">Filter by minimum score</td></tr>
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">search</td><td className="px-4 py-3 text-[#64748B]">Search by Alert ID or tx hash</td></tr>
             </tbody>
           </table>
+        </div>
+        <div className="mt-5">
+          <CodeBlock lang="bash" filename="curl">
+{`curl "https://sentinel-guard-three.vercel.app/api/alerts?limit=5&min_severity=75"`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4">
+          <CodeBlock lang="json" filename="response">
+{`[
+  {
+    "id": "a1b2c3d4e5f6",
+    "protocol": "9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K",
+    "rule_triggered": "TVL_VELOCITY",
+    "severity": 87,
+    "estimated_at_risk_usd": 125000,
+    "on_chain_tx": "5KtPn1LGuxhFiwjxErkxTb57Jvmh4Me5GA4K9v7FWE1vL4jE8D2m8HrZ3bVtBQzPLr",
+    "slot": 245012344,
+    "created_at": "2026-05-15T10:23:41.000Z"
+  }
+]`}
+          </CodeBlock>
         </div>
       </section>
 
@@ -1384,7 +1674,7 @@ function RestEndpointsContent() {
           <span className="rounded bg-[#16A34A] px-2 py-1 text-[11px] font-bold text-white">GET</span>
           <h2 className="text-[20px] font-semibold tracking-tight text-[#0F172A]">/api/tvl</h2>
         </div>
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Returns TVL snapshot history for charting.</p>
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Returns TVL snapshot history for a protocol, ordered by slot ascending. Use this to chart TVL over time.</p>
         <div className="mt-5 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
           <table className="w-full text-left text-[13px]">
             <thead className="bg-[#F8F9FC]">
@@ -1397,6 +1687,20 @@ function RestEndpointsContent() {
               <tr><td className="px-4 py-3 font-mono text-[#0F172A]">protocol</td><td className="px-4 py-3 text-[#64748B]">Required. Protocol pubkey to fetch.</td></tr>
             </tbody>
           </table>
+        </div>
+        <div className="mt-5">
+          <CodeBlock lang="bash" filename="curl">
+{`curl "https://sentinel-guard-three.vercel.app/api/tvl?protocol=9W95BjbZuXdwf6p7X3bHu3wnMb2R5y7A4K"`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4">
+          <CodeBlock lang="json" filename="response">
+{`[
+  { "slot": 245012300, "tvl_usd": 1200000, "timestamp": "2026-05-15T10:20:00.000Z" },
+  { "slot": 245012320, "tvl_usd": 1195000, "timestamp": "2026-05-15T10:20:08.000Z" },
+  { "slot": 245012344, "tvl_usd": 980000,  "timestamp": "2026-05-15T10:20:17.000Z" }
+]`}
+          </CodeBlock>
         </div>
       </section>
     </article>
@@ -1414,12 +1718,40 @@ function WebSocketFeedContent() {
         <h1 className="max-w-3xl text-[36px] font-bold tracking-tight text-[#0F172A]">WebSocket Feed</h1>
         <p className="mt-4 max-w-3xl text-[16px] leading-7 text-[#64748B]">Consume real-time threats with zero latency.</p>
       </div>
+      <section id="sdk-recommended" data-section className="mb-12 scroll-mt-20">
+        <SectionTitle title="Recommended: Use the SDK" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          The <code>@sentinelguard/sdk</code> package wraps the WebSocket connection and handles reconnection, JSON parsing, and protocol filtering for you. This is the recommended approach for most integrations.
+        </p>
+        <div className="mt-5">
+          <CodeBlock lang="typescript" filename="subscribe.ts">
+{`import SentinelClient from '@sentinelguard/sdk';
+
+const client = new SentinelClient();
+
+const unsubscribe = client.subscribe(
+  'YOUR_PROTOCOL_ADDRESS',
+  (alert) => {
+    console.log(\`Alert: \${alert.rule_triggered} — severity \${alert.severity}\`);
+  }
+);`}
+          </CodeBlock>
+        </div>
+        <div className="mt-4 rounded-lg border-l-[3px] border-[#2563EB] bg-[#EFF6FF] p-4">
+          <p className="text-[14px] leading-7 text-[#1E40AF]">
+            See the <a href="/docs/sdk-reference" className="underline font-medium">SDK Reference</a> for the full API including <code>getAlerts()</code>, <code>getThreats()</code>, and <code>isPaused()</code>.
+          </p>
+        </div>
+      </section>
+
       <section id="connection" data-section className="mb-12 scroll-mt-20">
-        <SectionTitle title="Connection" />
-        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">Connect directly to the watcher's streaming feed endpoint. No API key is required for read access.</p>
+        <SectionTitle title="Raw WebSocket (Advanced)" />
+        <p className="mt-4 text-[14px] leading-7 text-[#64748B]">
+          Connect directly to the feed endpoint if you need full control or are working in a non-JS environment. No API key is required.
+        </p>
         <div className="mt-5">
           <CodeBlock lang="javascript" filename="client.js">
-{`const ws = new WebSocket('wss://api.sentinelguard.io/feed');
+{`const ws = new WebSocket('wss://sentinel-guard-three.vercel.app/feed');
 
 ws.onmessage = (event) => {
   const alert = JSON.parse(event.data);
@@ -1427,8 +1759,8 @@ ws.onmessage = (event) => {
 };`}
           </CodeBlock>
         </div>
-        <div className="mt-5 rounded-lg border-l-[3px] border-[#2563EB] bg-[#EFF6FF] p-4">
-          <p className="text-[14px] leading-7 text-[#1E40AF]">Messages match the standard JSON Alert Schema. Pings are sent every 30 seconds to keep the connection alive.</p>
+        <div className="mt-5 rounded-lg border-l-[3px] border-[#F59E0B] bg-[#FFFBEB] p-4">
+          <p className="text-[14px] leading-7 text-[#92400E]">Messages match the <a href="/docs/alert-schema" className="underline font-medium">Alert Schema</a>. Pings are sent every 30 seconds to keep the connection alive. You are responsible for reconnect logic when using the raw WebSocket.</p>
         </div>
       </section>
     </article>
@@ -1445,19 +1777,8 @@ function FaqContent() {
         </div>
         <h1 className="max-w-3xl text-[36px] font-bold tracking-tight text-[#0F172A]">Frequently Asked Questions</h1>
       </div>
-      <section id="faq-list" data-section className="space-y-6">
-        <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
-          <h3 className="text-[16px] font-bold text-[#0F172A]">What happens if the watcher goes offline?</h3>
-          <p className="mt-3 text-[14px] leading-7 text-[#64748B]">Your protocol continues to function normally. SentinelGuard operates entirely off-chain, meaning its downtime cannot halt or disrupt your users' legitimate transactions. You simply lose automated pausing until it's restarted.</p>
-        </div>
-        <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
-          <h3 className="text-[16px] font-bold text-[#0F172A]">How do I resume the protocol after an automated pause?</h3>
-          <p className="mt-3 text-[14px] leading-7 text-[#64748B]">Once paused, withdrawals are locked until an authorized administrator key signs a transaction updating the <code>SentinelState</code> PDA to <code>paused = false</code>.</p>
-        </div>
-        <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
-          <h3 className="text-[16px] font-bold text-[#0F172A]">How fast is the pause action?</h3>
-          <p className="mt-3 text-[14px] leading-7 text-[#64748B]">Because the watcher consumes a Geyser gRPC stream, it evaluates slots in real-time as they propagate. End-to-end (from malicious tx hitting the RPC to the pause CPI landing in the next block), the reaction time is typically under 400ms.</p>
-        </div>
+      <section id="faq-list" data-section>
+        <FaqAccordion />
       </section>
     </article>
   );
@@ -1465,7 +1786,6 @@ function FaqContent() {
 
 export const DOCS_PAGES: Record<string, DocsPageConfig> = {
   introduction: {
-    sidebarVariant: 'introduction',
     toc: [
       { id: 'the-problem', label: 'The Problem' },
       { id: 'how-it-fixes-it', label: 'How It Fixes It' },
@@ -1476,7 +1796,6 @@ export const DOCS_PAGES: Record<string, DocsPageConfig> = {
     content: <IntroContent />,
   },
   'quick-start': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'prerequisites', label: 'Prerequisites' },
       { id: 'clone-and-install', label: 'Clone and Install' },
@@ -1488,20 +1807,6 @@ export const DOCS_PAGES: Record<string, DocsPageConfig> = {
     content: <QuickStartContent />,
   },
   'how-it-works': {
-    sidebarVariant: 'quickstart',
-    toc: [
-      { id: 'signal-intake', label: 'Signal Intake' },
-      { id: 'rolling-window-engine', label: 'Rolling Window Engine' },
-      { id: 'detection-rules', label: 'Detection Rules' },
-      { id: 'severity-threshold', label: 'Severity Threshold' },
-      { id: 'alert-lifecycle', label: 'Alert Lifecycle' },
-      { id: 'automated-defense', label: 'Automated Defense' },
-      { id: 'next-steps', label: 'Next Steps' },
-    ],
-    content: <HowItWorksContent />,
-  },
-  'how-detection-works': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'signal-intake', label: 'Signal Intake' },
       { id: 'rolling-window-engine', label: 'Rolling Window Engine' },
@@ -1514,7 +1819,6 @@ export const DOCS_PAGES: Record<string, DocsPageConfig> = {
     content: <HowItWorksContent />,
   },
   'detection-rules': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'flash-loan-drain', label: 'Flash Loan Drain' },
       { id: 'tvl-velocity', label: 'TVL Velocity' },
@@ -1524,60 +1828,58 @@ export const DOCS_PAGES: Record<string, DocsPageConfig> = {
     content: <DetectionRulesContent />,
   },
   'sdk-reference': {
-    sidebarVariant: 'quickstart',
     toc: [
-      { id: 'enforcing-the-pause', label: 'Enforcing the Pause' },
+      { id: 'installation', label: 'Installation' },
+      { id: 'quick-start', label: 'Quick Start' },
+      { id: 'sentinelclient', label: 'SentinelClient' },
+      { id: 'methods', label: 'Methods' },
+      { id: 'alert-type', label: 'Alert Type' },
     ],
     content: <SdkReferenceContent />,
   },
   'webhook-setup': {
-    sidebarVariant: 'quickstart',
     toc: [
-      { id: 'configuration', label: 'Configuration' },
-      { id: 'payload-example', label: 'Payload Example' },
+      { id: 'discord', label: 'Discord' },
+      { id: 'telegram', label: 'Telegram' },
+      { id: 'payload-example', label: 'Choosing a Channel' },
     ],
     content: <WebhookSetupContent />,
   },
   'protocol-registration': {
-    sidebarVariant: 'quickstart',
     toc: [
-      { id: 'the-sentinelstate-pda', label: '1. The SentinelState PDA' },
-      { id: 'initialization-instruction', label: '2. Initialization Instruction' },
+      { id: 'the-sentinelstate-pda', label: '1. SentinelState PDA' },
+      { id: 'initialization-instruction', label: '2. Initialization' },
+      { id: 'pause-instruction', label: '3. Pause Instruction' },
+      { id: 'circuit-breaker', label: '4. Circuit Breaker' },
     ],
     content: <ProtocolRegistrationContent />,
   },
   'rest-endpoints': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'get-api-alerts', label: 'GET /api/alerts' },
       { id: 'get-api-tvl', label: 'GET /api/tvl' },
     ],
     content: <RestEndpointsContent />,
   },
+
   'websocket-feed': {
-    sidebarVariant: 'quickstart',
     toc: [
-      { id: 'connection', label: 'Connection' },
+      { id: 'sdk-recommended', label: 'Recommended: SDK' },
+      { id: 'connection', label: 'Raw WebSocket' },
     ],
     content: <WebSocketFeedContent />,
   },
   'alert-schema': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'schema-fields', label: 'Schema Fields' },
+      { id: 'example-payload', label: 'Example Payload' },
     ],
     content: <AlertSchemaContent />,
   },
   'faq': {
-    sidebarVariant: 'quickstart',
     toc: [
       { id: 'faq-list', label: 'Questions' },
     ],
     content: <FaqContent />,
-  },
-  'changelog': {
-    sidebarVariant: 'quickstart',
-    toc: [],
-    content: <ComingSoonContent title="Changelog" />,
   },
 };

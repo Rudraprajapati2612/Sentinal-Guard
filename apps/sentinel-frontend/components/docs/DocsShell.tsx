@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import DocsNavbar from '@/components/docs/DocsNavbar';
 import DocsRightNav from '@/components/docs/DocsRightNav';
 import DocsSidebar from '@/components/docs/DocsSidebar';
+import Feedback from '@/components/docs/Feedback';
 import type { DocsPageConfig } from '@/components/docs/DocsPages';
 
 interface Props {
@@ -54,13 +55,19 @@ export default function DocsShell({ page }: Props) {
         >
           <DocsSidebar
             onLinkClick={() => setSidebarOpen(false)}
-            variant={page.sidebarVariant}
           />
         </aside>
 
-        <main className="flex-1 overflow-y-auto">{page.content}</main>
+        <main className="flex-1 overflow-y-auto">
+          <div key={JSON.stringify(page.toc)} style={{ animation: 'fadeIn 0.18s ease-out both' }}>
+            {page.content}
+            <div className="mx-auto max-w-4xl px-6 pb-12">
+              <Feedback />
+            </div>
+          </div>
+        </main>
 
-        <aside className="hidden w-56 flex-shrink-0 overflow-y-auto xl:block">
+        <aside className="hidden w-56 flex-shrink-0 overflow-y-auto lg:block">
           <DocsRightNav activeSection={activeSection} items={page.toc} />
         </aside>
       </div>
